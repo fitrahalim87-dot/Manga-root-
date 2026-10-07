@@ -1,0 +1,8 @@
+{
+  "name": "mangaroot",
+  "description": "Generator naskah video recap manga otomatis untuk YouTube. Upload manga, urutkan otomatis, dan generate VO script siap pakai menggunakan AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

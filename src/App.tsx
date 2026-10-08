@@ -37,6 +37,7 @@ import { MangaImage, RecapScript, ToneType, LanguageType, LengthType, ActiveSess
 import { saveRecapScript, getAllRecapScripts, deleteRecapScript, saveActiveSession, getActiveSession, clearActiveSession } from "./lib/db";
 import { PWAInstallButton } from "./components/PWAInstallButton";
 import { OfflineIndicator } from "./components/OfflineIndicator";
+import { generateRecapDirect, RecapPayload } from "./lib/geminiDirect";
 
 // Helper to convert base64 back to an active Blob URL for fast previewing in the current session
 function base64ToBlobUrl(base64: string): string {
@@ -62,8 +63,12 @@ function base64ToBlobUrl(base64: string): string {
 // Helper to dynamically apply watermark label text to base64 images
 async function watermarkBase64Image(base64: string, label: string): Promise<string> {
   return new Promise((resolve) => {
+    if (!base64 || typeof base64 !== "string" || !base64.trim()) {
+      resolve("");
+      return;
+    }
     const img = new Image();
-    img.src = base64;
+    img.onerror = () => resolve(base64);
     img.onload = () => {
       try {
         // Resize image to max 1200px to ensure ultra-fast upload, API stability, and zero timeouts/truncations
@@ -271,8 +276,12 @@ function getFileExtension(mimeType: string, filename: string): string {
 // Helper to convert base64 image of any type to target format
 async function convertImageToFormat(base64: string, mimeType: string, targetFormat: "jpeg" | "png"): Promise<{ base64: string; mimeType: string }> {
   return new Promise((resolve) => {
+    if (!base64 || typeof base64 !== "string" || !base64.trim()) {
+      resolve({ base64: "", mimeType: targetFormat === "png" ? "image/png" : "image/jpeg" });
+      return;
+    }
     const img = new Image();
-    img.src = base64;
+    img.onerror = () => resolve({ base64, mimeType });
     img.onload = () => {
       try {
         const canvas = document.createElement("canvas");
@@ -584,6 +593,58 @@ export default function App() {
     return paragraphs.slice(-3);
   };
 
+  // Direct Client-Side (Opsi 1): Process recap directly from browser when user API key is provided
+  const requestRecapWithFallback = async (payload: RecapPayload): Promise<{ script: string }> => {
+    const isKieAi = payload.model?.startsWith("gemini-3") && (payload.model.includes("-5-") || payload.model.includes("-6-") || payload.model.includes("-7-") || payload.model.includes("-8-"));
+    const hasUserKey = isKieAi ? !!payload.kieApiKey?.trim() : !!payload.googleApiKey?.trim();
+
+    // Direct Client-Side: When API key is provided, execute directly from browser to Google / Kie.ai
+    // Bypasses server 404, eliminates payload size limits, and ensures 100% compatibility on any hosting (Vercel, Netlify, PWA)
+    if (hasUserKey) {
+      console.log("[Mangaroot] Menjalankan pemrosesan naskah langsung dari browser (Direct Client-Side Mode)...");
+      return await generateRecapDirect(payload);
+    }
+
+    // Fallback: If no personal key entered, attempt backend route (for server-configured keys)
+    try {
+      const response = await fetch("/api/recap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        return await response.json();
+      }
+
+      // If 404 (backend Express not running on static deploy like Vercel)
+      if (response.status === 404) {
+        throw new Error("Server backend (/api/recap) tidak ditemukan (404). Silakan masukkan API Key Anda di menu Setelan agar naskah diproses langsung dari browser Anda.");
+      }
+
+      let errMsg = "Gagal melakukan generate naskah.";
+      try {
+        const contentType = response.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const errData = await response.json();
+          errMsg = errData.error || errMsg;
+        } else {
+          const textErr = await response.text();
+          errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
+        }
+      } catch {
+        errMsg = `Server Error (${response.status})`;
+      }
+
+      throw new Error(errMsg);
+    } catch (err: any) {
+      if (!err.message || err.message.includes("Failed to fetch") || err.message.includes("NetworkError") || err.message.includes("404")) {
+        throw new Error("Server tidak dapat dihubungi. Silakan masukkan API Key Anda di menu Setelan agar aplikasi berjalan langsung dari HP / Browser Anda.");
+      }
+      throw err;
+    }
+  };
+
   const generateRecap = async (isResume: boolean = false) => {
     if (images.length === 0) {
       setError("Silakan upload minimal satu gambar manga terlebih dahulu.");
@@ -672,43 +733,21 @@ export default function App() {
               const isFirstBatch = i === 0;
               const sendInitialContext = (isFirstBatch && scriptType === "continued") ? initialContextText : "";
 
-              const response = await fetch("/api/recap", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  images: chunkImages,
-                  model,
-                  googleApiKey,
-                  kieApiKey,
-                  tone,
-                  language,
-                  customInstructions,
-                  customStyleRef,
-                  previousParagraphs,
-                  initialContext: sendInitialContext,
-                  isSuperConcise,
-                  characterDetails
-                })
+              const data = await requestRecapWithFallback({
+                images: chunkImages,
+                model,
+                googleApiKey,
+                kieApiKey,
+                tone,
+                language,
+                customInstructions,
+                customStyleRef,
+                previousParagraphs,
+                initialContext: sendInitialContext,
+                isSuperConcise,
+                characterDetails
               });
 
-              if (!response.ok) {
-                let errMsg = "Gagal melakukan generate naskah.";
-                try {
-                  const contentType = response.headers.get("content-type");
-                  if (contentType && contentType.includes("application/json")) {
-                    const errData = await response.json();
-                    errMsg = errData.error || errMsg;
-                  } else {
-                    const textErr = await response.text();
-                    errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
-                  }
-                } catch (e) {
-                  errMsg = `Server Error (${response.status})`;
-                }
-                throw new Error(errMsg);
-              }
-
-              const data = await response.json();
               batchScript = data.script.trim();
               success = true;
               break;
@@ -787,42 +826,20 @@ export default function App() {
         setResumeAccumulatedScript("");
 
         setGenerationProgress("Menganalisis panel...");
-        const response = await fetch("/api/recap", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            images: imagesPayload,
-            model,
-            googleApiKey,
-            kieApiKey,
-            tone,
-            language,
-            customInstructions,
-            customStyleRef,
-            initialContext: scriptType === "continued" ? initialContextText : "",
-            isSuperConcise,
-            characterDetails
-          })
+        const data = await requestRecapWithFallback({
+          images: imagesPayload,
+          model,
+          googleApiKey,
+          kieApiKey,
+          tone,
+          language,
+          customInstructions,
+          customStyleRef,
+          initialContext: scriptType === "continued" ? initialContextText : "",
+          isSuperConcise,
+          characterDetails
         });
 
-        if (!response.ok) {
-          let errMsg = "Gagal melakukan generate naskah.";
-          try {
-            const contentType = response.headers.get("content-type");
-            if (contentType && contentType.includes("application/json")) {
-              const errData = await response.json();
-              errMsg = errData.error || errMsg;
-            } else {
-              const textErr = await response.text();
-              errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
-            }
-          } catch (e) {
-            errMsg = `Server Error (${response.status})`;
-          }
-          throw new Error(errMsg);
-        }
-
-        const data = await response.json();
         setCurrentScriptText(data.script);
         
         const firstImgName = images[0]?.name.replace(/\.[^/.]+$/, "") || "Manga";
@@ -1169,29 +1186,38 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
             ) : (
               /* Swipeable Horizontal Scroller of manga page previews */
               <div className="flex items-center gap-3 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden shrink-0 select-none">
-                {images.map((img, index) => (
-                  <div key={img.id} className="relative w-20 h-28 rounded-xl border border-slate-850 bg-slate-950 overflow-hidden shadow-md shrink-0 active:scale-95 transition-transform group">
-                    <img 
-                      src={img.url || img.base64} 
-                      alt={img.name} 
-                      className="w-full h-full object-cover pointer-events-none" 
-                      loading="lazy"
-                    />
-                    
-                    {/* Page Index badge */}
-                    <div className="absolute bottom-1 left-1 bg-slate-950/90 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-850">
-                      #{index + 1}
-                    </div>
+                {images.map((img, index) => {
+                  const imageSrc = (img.url || img.base64 || "").trim();
+                  return (
+                    <div key={img.id} className="relative w-20 h-28 rounded-xl border border-slate-850 bg-slate-950 overflow-hidden shadow-md shrink-0 active:scale-95 transition-transform group">
+                      {imageSrc ? (
+                        <img 
+                          src={imageSrc} 
+                          alt={img.name || `Halaman ${index + 1}`} 
+                          className="w-full h-full object-cover pointer-events-none" 
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-slate-500 text-[10px] font-mono">
+                          <span>#{index + 1}</span>
+                        </div>
+                      )}
+                      
+                      {/* Page Index badge */}
+                      <div className="absolute bottom-1 left-1 bg-slate-950/90 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-850">
+                        #{index + 1}
+                      </div>
 
-                    {/* Circular close button */}
-                    <button
-                      onClick={(e) => removeImage(img.id, e)}
-                      className="absolute top-1 right-1 p-1 bg-slate-950/90 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 rounded-full border border-slate-850 backdrop-blur-xs transition cursor-pointer active:scale-90"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  </div>
-                ))}
+                      {/* Circular close button */}
+                      <button
+                        onClick={(e) => removeImage(img.id, e)}
+                        className="absolute top-1 right-1 p-1 bg-slate-950/90 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 rounded-full border border-slate-850 backdrop-blur-xs transition cursor-pointer active:scale-90"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  );
+                })}
 
                 {/* Inline "Tambah" upload square */}
                 <button
@@ -1714,18 +1740,19 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                   <div className="flex flex-col gap-4 select-text">
                     {parseRecapScript(currentScriptText).map((p) => {
                       const correspondingImg = images[p.index - 1];
+                      const imgSrc = correspondingImg ? (correspondingImg.url || correspondingImg.base64 || "").trim() : "";
                       return (
                         <div key={p.index} className="bg-slate-900/40 border border-slate-800/60 rounded-[1.5rem] p-4 flex gap-4 relative hover:border-indigo-500/30 transition-all group">
                           <div className="shrink-0 flex flex-col gap-2 items-center">
-                            {correspondingImg ? (
+                            {correspondingImg && imgSrc ? (
                               <div 
-                                onClick={() => setFullscreenImageUrl(correspondingImg.url || correspondingImg.base64)}
+                                onClick={() => setFullscreenImageUrl(imgSrc)}
                                 className="w-16 h-24 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-xl cursor-zoom-in active:scale-95 transition-all group-hover:border-indigo-500/50"
                                 title="Expand image"
                               >
                                 <img 
-                                  src={correspondingImg.url || correspondingImg.base64} 
-                                  alt={correspondingImg.name}
+                                  src={imgSrc} 
+                                  alt={correspondingImg.name || `Halaman ${p.index}`}
                                   className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
                                   referrerPolicy="no-referrer"
                                 />
@@ -2026,7 +2053,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       )}
 
       {/* FULL SCREEN IMAGE PREVIEW MODAL */}
-      {fullscreenImageUrl && (
+      {fullscreenImageUrl && fullscreenImageUrl.trim() !== "" && (
         <div 
           onClick={() => setFullscreenImageUrl(null)}
           className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer animate-fadeIn"
@@ -2043,7 +2070,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           </div>
           
           <img 
-            src={fullscreenImageUrl} 
+            src={fullscreenImageUrl.trim()} 
             alt="Manga Preview" 
             className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-slate-800"
             referrerPolicy="no-referrer"

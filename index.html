@@ -2,6 +2,21 @@
 <html lang="id">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Suppress Vite HMR WebSocket errors in AI Studio iframe environment
+      window.addEventListener('error', function(e) {
+        if (e && e.message && e.message.includes('WebSocket')) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(e) {
+        if (e && e.reason && e.reason.message && e.reason.message.includes('WebSocket')) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      }, true);
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Mangaroot - Manga Recap Studio</title>
     <meta name="description" content="Generator naskah video recap manga otomatis untuk YouTube. Upload manga, urutkan otomatis, dan generate VO script siap pakai menggunakan AI." />

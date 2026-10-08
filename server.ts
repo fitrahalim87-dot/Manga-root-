@@ -40,6 +40,7 @@ async function startServer() {
       const { 
         images, 
         model = "gemini-2.0-flash",
+        provider = "google",
         googleApiKey = "",
         kieApiKey = "",
         tone = "dramatic", 
@@ -57,13 +58,13 @@ async function startServer() {
       }
 
       // Determine model type and select correct key
-      const isKieAi = model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-"));
+      const isKieAi = provider === "kie" || (model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-")));
       
       const userKey = isKieAi ? kieApiKey.trim() : googleApiKey.trim();
       const apiKey = userKey || process.env.GEMINI_API_KEY;
 
       if (!apiKey) {
-        throw new Error(`API Key untuk ${isKieAi ? "Kie.ai" : "Google Gemini"} tidak dikonfigurasi. Silakan isi di menu Setelan.`);
+        throw new Error(`API Key untuk ${isKieAi ? "Kie.ai" : "Google AI Studio"} tidak dikonfigurasi. Silakan isi di menu Pengaturan.`);
       }
 
       // Sort images by filename or globalIndex if available
@@ -314,8 +315,7 @@ ${characterDetails}
       } else {
         // For Google REST API, key is usually a query parameter
         if (!isKieAi) {
-          endpoint += `?key=${encodeURIComponent(apiKey)}`;
-          headers["x-goog-api-key"] = apiKey;
+          endpoint += `?key=${apiKey}`;
         } else {
           // For Kie AI proxy, try both common patterns
           headers["Authorization"] = `Bearer ${apiKey}`;
@@ -333,13 +333,7 @@ ${characterDetails}
         generationConfig: {
           temperature: 0.85,
           maxOutputTokens: 8192
-        },
-        safetySettings: [
-          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-        ]
+        }
       };
 
       console.log(`Sending request to endpoint: ${endpoint} (Model: ${model})`);

@@ -30,7 +30,9 @@ import {
   Undo2,
   Settings,
   ChevronDown,
-  Key
+  Key,
+  Globe,
+  Bot
 } from "lucide-react";
 import JSZip from "jszip";
 import { motion, AnimatePresence } from "motion/react";
@@ -307,6 +309,12 @@ export default function App() {
   const [isSettingsExpanded, setIsSettingsExpanded] = useState<boolean>(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
+  const [activeProvider, setActiveProvider] = useState<"google" | "kie">(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("mangaroot_active_provider") as "google" | "kie") || "google";
+    }
+    return "google";
+  });
   const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("mangaroot_gemini_api_key") || "";
@@ -321,13 +329,13 @@ export default function App() {
   });
   const [model, setModel] = useState<string>("gemini-2.0-flash");
 
-  // Initial check: Prompt user for API key if empty
+  // Initial check: Prompt user for API key if current active provider key is empty
   useEffect(() => {
-    const savedKey = typeof window !== "undefined" ? localStorage.getItem("mangaroot_gemini_api_key") : null;
-    if (!savedKey && !googleApiKey.trim()) {
+    const currentActiveKey = activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim();
+    if (!currentActiveKey) {
       setIsSettingsModalOpen(true);
     }
-  }, []);
+  }, [activeProvider]);
 
   // Live Android Clock tick
   useEffect(() => {
@@ -606,8 +614,9 @@ export default function App() {
   };
 
   const generateRecap = async (isResume: boolean = false) => {
-    if (!googleApiKey.trim()) {
-      setError("Aplikasi tidak dapat berjalan tanpa API Key Gemini. Silakan atur API Key terlebih dahulu.");
+    const activeKey = activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim();
+    if (!activeKey) {
+      setError(`Aplikasi tidak dapat berjalan tanpa API Key ${activeProvider === "google" ? "Google AI Studio" : "Kie.ai"}. Silakan atur API Key terlebih dahulu.`);
       setIsSettingsModalOpen(true);
       return;
     }
@@ -705,6 +714,7 @@ export default function App() {
                 body: JSON.stringify({
                   images: chunkImages,
                   model,
+                  provider: activeProvider,
                   googleApiKey,
                   kieApiKey,
                   tone,
@@ -820,6 +830,7 @@ export default function App() {
           body: JSON.stringify({
             images: imagesPayload,
             model,
+            provider: activeProvider,
             googleApiKey,
             kieApiKey,
             tone,
@@ -1136,14 +1147,14 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
             <button
               onClick={() => setIsSettingsModalOpen(true)}
               className={`relative p-2 rounded-xl border transition-all active:scale-90 cursor-pointer flex items-center justify-center ${
-                !googleApiKey.trim()
+                !(activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim())
                   ? "bg-rose-500/20 border-rose-500/50 text-rose-300 animate-pulse shadow-lg shadow-rose-950/40"
                   : "bg-slate-800/80 hover:bg-slate-700/80 border-slate-700 text-slate-300 hover:text-white"
               }`}
-              title="Pengaturan API Key"
+              title="Pengaturan Provider & API Key"
             >
               <Settings className="w-4 h-4" />
-              {!googleApiKey.trim() && (
+              {!(activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim()) && (
                 <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
               )}
             </button>
@@ -1298,16 +1309,62 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                   />
                 </div>
 
-                {/* Status API Key & Akses Modal Pengaturan */}
+                {/* Provider Engine Selector Pills */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Active Engine Provider</label>
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 border border-slate-800 rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveProvider("google");
+                        localStorage.setItem("mangaroot_active_provider", "google");
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        activeProvider === "google"
+                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-950/50"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Google AI Studio</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveProvider("kie");
+                        localStorage.setItem("mangaroot_active_provider", "kie");
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        activeProvider === "kie"
+                          ? "bg-cyan-600 text-white shadow-md shadow-cyan-950/50"
+                          : "text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      <Globe className="w-3.5 h-3.5 text-cyan-300" />
+                      <span>Kie.ai Engine</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Status API Key Aktif */}
                 <div className="flex items-center justify-between p-3.5 bg-slate-950/80 border border-slate-800 rounded-2xl">
                   <div className="flex items-center gap-2.5">
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${googleApiKey.trim() ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400 animate-pulse"}`}>
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                      (activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim())
+                        ? "bg-emerald-500/20 text-emerald-400"
+                        : "bg-rose-500/20 text-rose-400 animate-pulse"
+                    }`}>
                       <Key className="w-4 h-4" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-slate-200">Gemini API Key</p>
+                      <p className="text-xs font-bold text-slate-200">
+                        {activeProvider === "google" ? "Google Gemini Key" : "Kie.ai Key"}
+                      </p>
                       <p className="text-[10px] text-slate-400">
-                        {googleApiKey.trim() ? "Terkonfigurasi & Aktif" : "Belum diisi (Aplikasi Terkunci)"}
+                        {(activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim())
+                          ? "Terkonfigurasi & Aktif"
+                          : "Belum diisi (Aplikasi Terkunci)"}
                       </p>
                     </div>
                   </div>
@@ -1322,19 +1379,26 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
 
                 {/* Model Selection */}
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Engine Model</label>
+                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Engine Model ({activeProvider === "google" ? "Google AI Studio" : "Kie.ai"})</label>
                   <select
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all cursor-pointer outline-none font-sans"
                   >
-                    <option value="gemini-2.0-flash">Google AI Studio (Default)</option>
-                    <optgroup label="Kie.ai Project Models">
-                      <option value="gemini-3-5-flash">3.5 Flash</option>
-                      <option value="gemini-3-6-flash">3.6 Flash</option>
-                      <option value="gemini-3-7-flash">3.7 Flash</option>
-                      <option value="gemini-3-8-flash">3.8 Flash</option>
-                    </optgroup>
+                    {activeProvider === "google" ? (
+                      <>
+                        <option value="gemini-2.0-flash">Gemini 2.0 Flash (Default - Cepat & Cerdas)</option>
+                        <option value="gemini-1.5-flash">Gemini 1.5 Flash (Stabil)</option>
+                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="gemini-3-5-flash">Kie.ai 3.5 Flash</option>
+                        <option value="gemini-3-6-flash">Kie.ai 3.6 Flash</option>
+                        <option value="gemini-3-7-flash">Kie.ai 3.7 Flash</option>
+                        <option value="gemini-3-8-flash">Kie.ai 3.8 Flash</option>
+                      </>
+                    )}
                   </select>
                 </div>
 
@@ -2101,6 +2165,8 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       <SettingsModal
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
+        activeProvider={activeProvider}
+        setActiveProvider={setActiveProvider}
         googleApiKey={googleApiKey}
         setGoogleApiKey={setGoogleApiKey}
         kieApiKey={kieApiKey}

@@ -39,8 +39,7 @@ async function startServer() {
     try {
       const { 
         images, 
-        model = "gemini-2.0-flash",
-        provider = "google",
+        model = "gemini-1.5-flash",
         googleApiKey = "",
         kieApiKey = "",
         tone = "dramatic", 
@@ -58,13 +57,13 @@ async function startServer() {
       }
 
       // Determine model type and select correct key
-      const isKieAi = provider === "kie" || (model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-")));
+      const isKieAi = model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-"));
       
       const userKey = isKieAi ? kieApiKey.trim() : googleApiKey.trim();
       const apiKey = userKey || process.env.GEMINI_API_KEY;
 
       if (!apiKey) {
-        throw new Error(`API Key untuk ${isKieAi ? "Kie.ai" : "Google AI Studio"} tidak dikonfigurasi. Silakan isi di menu Pengaturan.`);
+        throw new Error(`API Key untuk ${isKieAi ? "Kie.ai" : "Google Gemini"} tidak dikonfigurasi. Silakan isi di menu Setelan.`);
       }
 
       // Sort images by filename or globalIndex if available
@@ -501,9 +500,6 @@ ${characterDetails}
       res.status(500).json({ error: error.message || "Gagal memproses request AI. Pastikan API Key di panel Secrets sudah valid." });
     }
   });
-
-  // Serve public assets (PWA icons, manifest, etc.)
-  app.use(express.static(path.join(process.cwd(), "public")));
 
   // Serve static files and integrate Vite in development
   if (process.env.NODE_ENV !== "production") {

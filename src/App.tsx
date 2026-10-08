@@ -29,18 +29,13 @@ import {
   CheckCircle2,
   Undo2,
   Settings,
-  ChevronDown,
-  Key,
-  Globe,
-  Bot
+  ChevronDown
 } from "lucide-react";
+import { PWAInstallButton } from "./components/PWAInstallButton";
 import JSZip from "jszip";
 import { motion, AnimatePresence } from "motion/react";
 import { MangaImage, RecapScript, ToneType, LanguageType, LengthType, ActiveSession } from "./types";
 import { saveRecapScript, getAllRecapScripts, deleteRecapScript, saveActiveSession, getActiveSession, clearActiveSession } from "./lib/db";
-import { PWAInstallButton } from "./components/PWAInstallButton";
-import { OfflineIndicator } from "./components/OfflineIndicator";
-import { SettingsModal } from "./components/SettingsModal";
 
 // Helper to convert base64 back to an active Blob URL for fast previewing in the current session
 function base64ToBlobUrl(base64: string): string {
@@ -307,35 +302,10 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState("");
   const [fullscreenImageUrl, setFullscreenImageUrl] = useState<string | null>(null);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState<boolean>(true);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
-  const [activeProvider, setActiveProvider] = useState<"google" | "kie">(() => {
-    if (typeof window !== "undefined") {
-      return (localStorage.getItem("mangaroot_active_provider") as "google" | "kie") || "google";
-    }
-    return "google";
-  });
-  const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("mangaroot_gemini_api_key") || "";
-    }
-    return "";
-  });
-  const [kieApiKey, setKieApiKey] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("mangaroot_kie_api_key") || "";
-    }
-    return "";
-  });
-  const [model, setModel] = useState<string>("gemini-2.0-flash");
-
-  // Initial check: Prompt user for API key if current active provider key is empty
-  useEffect(() => {
-    const currentActiveKey = activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim();
-    if (!currentActiveKey) {
-      setIsSettingsModalOpen(true);
-    }
-  }, [activeProvider]);
+  const [googleApiKey, setGoogleApiKey] = useState<string>("");
+  const [kieApiKey, setKieApiKey] = useState<string>("");
+  const [model, setModel] = useState<string>("gemini-1.5-flash");
 
   // Live Android Clock tick
   useEffect(() => {
@@ -451,7 +421,7 @@ export default function App() {
           setSeriesName(session.seriesName || "Munou na Nana (Talentless Nana)");
           setCurrentScriptTitle(session.currentScriptTitle);
           setCurrentScriptText(session.resumeAccumulatedScript);
-          setModel(session.model || "gemini-2.0-flash");
+          setModel(session.model || "gemini-1.5-flash");
           setGoogleApiKey(session.googleApiKey || "");
           setKieApiKey(session.kieApiKey || "");
           setIsSuperConcise(true);
@@ -614,13 +584,6 @@ export default function App() {
   };
 
   const generateRecap = async (isResume: boolean = false) => {
-    const activeKey = activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim();
-    if (!activeKey) {
-      setError(`Aplikasi tidak dapat berjalan tanpa API Key ${activeProvider === "google" ? "Google AI Studio" : "Kie.ai"}. Silakan atur API Key terlebih dahulu.`);
-      setIsSettingsModalOpen(true);
-      return;
-    }
-
     if (images.length === 0) {
       setError("Silakan upload minimal satu gambar manga terlebih dahulu.");
       return;
@@ -714,7 +677,6 @@ export default function App() {
                 body: JSON.stringify({
                   images: chunkImages,
                   model,
-                  provider: activeProvider,
                   googleApiKey,
                   kieApiKey,
                   tone,
@@ -830,7 +792,6 @@ export default function App() {
           body: JSON.stringify({
             images: imagesPayload,
             model,
-            provider: activeProvider,
             googleApiKey,
             kieApiKey,
             tone,
@@ -1132,7 +1093,6 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           </div>
 
           <div className="flex items-center gap-2">
-            <PWAInstallButton variant="header" />
             {images.length > 0 && (
               <button
                 onClick={clearAllImages}
@@ -1142,25 +1102,12 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
-
-            {/* Tombol Pengaturan API Key Sudut Kanan Atas */}
-            <button
-              onClick={() => setIsSettingsModalOpen(true)}
-              className={`relative p-2 rounded-xl border transition-all active:scale-90 cursor-pointer flex items-center justify-center ${
-                !(activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim())
-                  ? "bg-rose-500/20 border-rose-500/50 text-rose-300 animate-pulse shadow-lg shadow-rose-950/40"
-                  : "bg-slate-800/80 hover:bg-slate-700/80 border-slate-700 text-slate-300 hover:text-white"
-              }`}
-              title="Pengaturan Provider & API Key"
-            >
-              <Settings className="w-4 h-4" />
-              {!(activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim()) && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
-              )}
-            </button>
             
-            <div className="px-2.5 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-bold text-indigo-400 uppercase tracking-[0.15em] font-mono select-none">
-              v1.5
+            <div className="flex items-center gap-2">
+              <PWAInstallButton />
+              <div className="px-2.5 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-bold text-indigo-400 uppercase tracking-[0.15em] font-mono select-none">
+                v1.5
+              </div>
             </div>
           </div>
         </header>
@@ -1223,39 +1170,29 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
             ) : (
               /* Swipeable Horizontal Scroller of manga page previews */
               <div className="flex items-center gap-3 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden shrink-0 select-none">
-                {images.map((img, index) => {
-                  const imageSrc = (img.url && img.url.trim() !== "") ? img.url : ((img.base64 && img.base64.trim() !== "") ? img.base64 : null);
-                  return (
-                    <div key={img.id} className="relative w-20 h-28 rounded-xl border border-slate-850 bg-slate-950 overflow-hidden shadow-md shrink-0 active:scale-95 transition-transform group">
-                      {imageSrc ? (
-                        <img 
-                          src={imageSrc} 
-                          alt={img.name} 
-                          className="w-full h-full object-cover pointer-events-none" 
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 p-2 text-slate-500">
-                          <FileImage className="w-6 h-6 mb-1 text-slate-600" />
-                          <span className="text-[8px] font-mono truncate max-w-full">{img.name}</span>
-                        </div>
-                      )}
-                      
-                      {/* Page Index badge */}
-                      <div className="absolute bottom-1 left-1 bg-slate-950/90 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-850">
-                        #{index + 1}
-                      </div>
-
-                      {/* Circular close button */}
-                      <button
-                        onClick={(e) => removeImage(img.id, e)}
-                        className="absolute top-1 right-1 p-1 bg-slate-950/90 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 rounded-full border border-slate-850 backdrop-blur-xs transition cursor-pointer active:scale-90"
-                      >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
+                {images.map((img, index) => (
+                  <div key={img.id} className="relative w-20 h-28 rounded-xl border border-slate-850 bg-slate-950 overflow-hidden shadow-md shrink-0 active:scale-95 transition-transform group">
+                    <img 
+                      src={img.url || img.base64} 
+                      alt={img.name} 
+                      className="w-full h-full object-cover pointer-events-none" 
+                      loading="lazy"
+                    />
+                    
+                    {/* Page Index badge */}
+                    <div className="absolute bottom-1 left-1 bg-slate-950/90 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-850">
+                      #{index + 1}
                     </div>
-                  );
-                })}
+
+                    {/* Circular close button */}
+                    <button
+                      onClick={(e) => removeImage(img.id, e)}
+                      className="absolute top-1 right-1 p-1 bg-slate-950/90 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 rounded-full border border-slate-850 backdrop-blur-xs transition cursor-pointer active:scale-90"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                ))}
 
                 {/* Inline "Tambah" upload square */}
                 <button
@@ -1294,9 +1231,6 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
             {/* Accordion panel content */}
             {isSettingsExpanded && (
               <div className="p-5 space-y-5 animate-fadeIn border-t border-slate-800/20 bg-slate-900/10">
-                {/* PWA Home Screen Install Card */}
-                <PWAInstallButton variant="settings" />
-
                 {/* Judul Seri Manga */}
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Series Title</label>
@@ -1309,96 +1243,67 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                   />
                 </div>
 
-                {/* Provider Engine Selector Pills */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Active Engine Provider</label>
-                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 border border-slate-800 rounded-2xl">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveProvider("google");
-                        localStorage.setItem("mangaroot_active_provider", "google");
-                      }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                        activeProvider === "google"
-                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-950/50"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Google AI Studio</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveProvider("kie");
-                        localStorage.setItem("mangaroot_active_provider", "kie");
-                      }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                        activeProvider === "kie"
-                          ? "bg-cyan-600 text-white shadow-md shadow-cyan-950/50"
-                          : "text-slate-400 hover:text-slate-200"
-                      }`}
-                    >
-                      <Globe className="w-3.5 h-3.5 text-cyan-300" />
-                      <span>Kie.ai Engine</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Status API Key Aktif */}
-                <div className="flex items-center justify-between p-3.5 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                  <div className="flex items-center gap-2.5">
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                      (activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim())
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : "bg-rose-500/20 text-rose-400 animate-pulse"
-                    }`}>
-                      <Key className="w-4 h-4" />
+                {/* API Keys Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">AI Studio Project Key</label>
+                      <a 
+                        href="https://aistudio.google.com/app/apikey" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 flex items-center gap-1 transition-colors"
+                      >
+                        <HelpCircle className="w-2.5 h-2.5" />
+                        Get Key
+                      </a>
                     </div>
-                    <div>
-                      <p className="text-xs font-bold text-slate-200">
-                        {activeProvider === "google" ? "Google Gemini Key" : "Kie.ai Key"}
-                      </p>
-                      <p className="text-[10px] text-slate-400">
-                        {(activeProvider === "google" ? googleApiKey.trim() : kieApiKey.trim())
-                          ? "Terkonfigurasi & Aktif"
-                          : "Belum diisi (Aplikasi Terkunci)"}
-                      </p>
-                    </div>
+                    <input
+                      type="password"
+                      placeholder="Optional (System Connected)"
+                      value={googleApiKey}
+                      onChange={(e) => setGoogleApiKey(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans"
+                    />
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsSettingsModalOpen(true)}
-                    className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-xl text-[10px] font-bold uppercase font-mono tracking-wider transition active:scale-95 cursor-pointer shadow-md"
-                  >
-                    Atur API Key
-                  </button>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Kie.ai Project Key</label>
+                      <a 
+                        href="https://kie.ai/id/api-key" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 flex items-center gap-1 transition-colors"
+                      >
+                        <HelpCircle className="w-2.5 h-2.5" />
+                        Get Key
+                      </a>
+                    </div>
+                    <input
+                      type="password"
+                      placeholder="••••••••••••••••"
+                      value={kieApiKey}
+                      onChange={(e) => setKieApiKey(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans"
+                    />
+                  </div>
                 </div>
 
                 {/* Model Selection */}
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Engine Model ({activeProvider === "google" ? "Google AI Studio" : "Kie.ai"})</label>
+                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Engine Model</label>
                   <select
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
                     className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all cursor-pointer outline-none font-sans"
                   >
-                    {activeProvider === "google" ? (
-                      <>
-                        <option value="gemini-2.0-flash">Gemini 2.0 Flash (Default - Cepat & Cerdas)</option>
-                        <option value="gemini-1.5-flash">Gemini 1.5 Flash (Stabil)</option>
-                        <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="gemini-3-5-flash">Kie.ai 3.5 Flash</option>
-                        <option value="gemini-3-6-flash">Kie.ai 3.6 Flash</option>
-                        <option value="gemini-3-7-flash">Kie.ai 3.7 Flash</option>
-                        <option value="gemini-3-8-flash">Kie.ai 3.8 Flash</option>
-                      </>
-                    )}
+                    <option value="gemini-1.5-flash">Google AI Studio (Default)</option>
+                    <optgroup label="Kie.ai Project Models">
+                      <option value="gemini-3-5-flash">3.5 Flash</option>
+                      <option value="gemini-3-6-flash">3.6 Flash</option>
+                      <option value="gemini-3-7-flash">3.7 Flash</option>
+                      <option value="gemini-3-8-flash">3.8 Flash</option>
+                    </optgroup>
                   </select>
                 </div>
 
@@ -1810,37 +1715,25 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                       return (
                         <div key={p.index} className="bg-slate-900/40 border border-slate-800/60 rounded-[1.5rem] p-4 flex gap-4 relative hover:border-indigo-500/30 transition-all group">
                           <div className="shrink-0 flex flex-col gap-2 items-center">
-                            {correspondingImg ? (() => {
-                              const scriptImgSrc = (correspondingImg.url && correspondingImg.url.trim() !== "") ? correspondingImg.url : ((correspondingImg.base64 && correspondingImg.base64.trim() !== "") ? correspondingImg.base64 : null);
-                              return (
-                                <div 
-                                  onClick={() => {
-                                    if (scriptImgSrc) setFullscreenImageUrl(scriptImgSrc);
-                                  }}
-                                  className={`w-16 h-24 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-xl ${scriptImgSrc ? 'cursor-zoom-in active:scale-95 group-hover:border-indigo-500/50' : 'cursor-default'} transition-all`}
-                                  title={scriptImgSrc ? "Expand image" : undefined}
-                                >
-                                  {scriptImgSrc ? (
-                                    <img 
-                                      src={scriptImgSrc} 
-                                      alt={correspondingImg.name}
-                                      className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
-                                      referrerPolicy="no-referrer"
-                                    />
-                                  ) : (
-                                    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 text-slate-600">
-                                      <FileImage className="w-5 h-5 mb-1 text-slate-700" />
-                                      <span className="text-[7px] font-mono">No Src</span>
-                                    </div>
-                                  )}
-                                  <div className="absolute inset-0 bg-indigo-950/10 flex items-end pointer-events-none">
-                                    <span className="w-full text-center py-1 bg-slate-950/90 text-[8px] font-black font-mono text-indigo-400 uppercase tracking-widest">
-                                      PG #{p.index}
-                                    </span>
-                                  </div>
+                            {correspondingImg ? (
+                              <div 
+                                onClick={() => setFullscreenImageUrl(correspondingImg.url || correspondingImg.base64)}
+                                className="w-16 h-24 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-xl cursor-zoom-in active:scale-95 transition-all group-hover:border-indigo-500/50"
+                                title="Expand image"
+                              >
+                                <img 
+                                  src={correspondingImg.url || correspondingImg.base64} 
+                                  alt={correspondingImg.name}
+                                  className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                                  referrerPolicy="no-referrer"
+                                />
+                                <div className="absolute inset-0 bg-indigo-950/10 flex items-end">
+                                  <span className="w-full text-center py-1 bg-slate-950/90 text-[8px] font-black font-mono text-indigo-400 uppercase tracking-widest">
+                                    PG #{p.index}
+                                  </span>
                                 </div>
-                              );
-                            })() : (
+                              </div>
+                            ) : (
                               <div className="w-14 h-20 rounded-lg border border-dashed border-slate-800 bg-slate-950/40 flex items-center justify-center">
                                 <span className="text-[8px] font-mono text-slate-600">No Img</span>
                               </div>
@@ -2131,7 +2024,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       )}
 
       {/* FULL SCREEN IMAGE PREVIEW MODAL */}
-      {Boolean(fullscreenImageUrl && fullscreenImageUrl.trim()) && (
+      {fullscreenImageUrl && (
         <div 
           onClick={() => setFullscreenImageUrl(null)}
           className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer animate-fadeIn"
@@ -2148,7 +2041,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           </div>
           
           <img 
-            src={fullscreenImageUrl!} 
+            src={fullscreenImageUrl} 
             alt="Manga Preview" 
             className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-slate-800"
             referrerPolicy="no-referrer"
@@ -2157,21 +2050,6 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           <span className="absolute bottom-6 text-slate-500 text-[10px] font-mono font-bold uppercase tracking-widest">Tap anywhere to dismiss</span>
         </div>
       )}
-
-      {/* Offline Connectivity Status Pill */}
-      <OfflineIndicator />
-
-      {/* API Key Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsModalOpen}
-        onClose={() => setIsSettingsModalOpen(false)}
-        activeProvider={activeProvider}
-        setActiveProvider={setActiveProvider}
-        googleApiKey={googleApiKey}
-        setGoogleApiKey={setGoogleApiKey}
-        kieApiKey={kieApiKey}
-        setKieApiKey={setKieApiKey}
-      />
 
     </div>
   );

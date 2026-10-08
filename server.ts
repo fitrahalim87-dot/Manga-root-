@@ -314,7 +314,8 @@ ${characterDetails}
       } else {
         // For Google REST API, key is usually a query parameter
         if (!isKieAi) {
-          endpoint += `?key=${apiKey}`;
+          endpoint += `?key=${encodeURIComponent(apiKey)}`;
+          headers["x-goog-api-key"] = apiKey;
         } else {
           // For Kie AI proxy, try both common patterns
           headers["Authorization"] = `Bearer ${apiKey}`;
@@ -332,7 +333,13 @@ ${characterDetails}
         generationConfig: {
           temperature: 0.85,
           maxOutputTokens: 8192
-        }
+        },
+        safetySettings: [
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+        ]
       };
 
       console.log(`Sending request to endpoint: ${endpoint} (Model: ${model})`);

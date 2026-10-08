@@ -29,7 +29,8 @@ import {
   CheckCircle2,
   Undo2,
   Settings,
-  ChevronDown
+  ChevronDown,
+  Key
 } from "lucide-react";
 import JSZip from "jszip";
 import { motion, AnimatePresence } from "motion/react";
@@ -37,7 +38,7 @@ import { MangaImage, RecapScript, ToneType, LanguageType, LengthType, ActiveSess
 import { saveRecapScript, getAllRecapScripts, deleteRecapScript, saveActiveSession, getActiveSession, clearActiveSession } from "./lib/db";
 import { PWAInstallButton } from "./components/PWAInstallButton";
 import { OfflineIndicator } from "./components/OfflineIndicator";
-import { generateRecapDirect, RecapPayload } from "./lib/geminiDirect";
+import { SettingsModal } from "./components/SettingsModal";
 
 // Helper to convert base64 back to an active Blob URL for fast previewing in the current session
 function base64ToBlobUrl(base64: string): string {
@@ -63,12 +64,8 @@ function base64ToBlobUrl(base64: string): string {
 // Helper to dynamically apply watermark label text to base64 images
 async function watermarkBase64Image(base64: string, label: string): Promise<string> {
   return new Promise((resolve) => {
-    if (!base64 || typeof base64 !== "string" || !base64.trim()) {
-      resolve("");
-      return;
-    }
     const img = new Image();
-    img.onerror = () => resolve(base64);
+    img.src = base64;
     img.onload = () => {
       try {
         // Resize image to max 1200px to ensure ultra-fast upload, API stability, and zero timeouts/truncations
@@ -276,12 +273,8 @@ function getFileExtension(mimeType: string, filename: string): string {
 // Helper to convert base64 image of any type to target format
 async function convertImageToFormat(base64: string, mimeType: string, targetFormat: "jpeg" | "png"): Promise<{ base64: string; mimeType: string }> {
   return new Promise((resolve) => {
-    if (!base64 || typeof base64 !== "string" || !base64.trim()) {
-      resolve({ base64: "", mimeType: targetFormat === "png" ? "image/png" : "image/jpeg" });
-      return;
-    }
     const img = new Image();
-    img.onerror = () => resolve({ base64, mimeType });
+    img.src = base64;
     img.onload = () => {
       try {
         const canvas = document.createElement("canvas");
@@ -312,10 +305,29 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState("");
   const [fullscreenImageUrl, setFullscreenImageUrl] = useState<string | null>(null);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState<boolean>(true);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
-  const [googleApiKey, setGoogleApiKey] = useState<string>("");
-  const [kieApiKey, setKieApiKey] = useState<string>("");
+  const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("mangaroot_gemini_api_key") || "";
+    }
+    return "";
+  });
+  const [kieApiKey, setKieApiKey] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("mangaroot_kie_api_key") || "";
+    }
+    return "";
+  });
   const [model, setModel] = useState<string>("gemini-2.0-flash");
+
+  // Initial check: Prompt user for API key if empty
+  useEffect(() => {
+    const savedKey = typeof window !== "undefined" ? localStorage.getItem("mangaroot_gemini_api_key") : null;
+    if (!savedKey && !googleApiKey.trim()) {
+      setIsSettingsModalOpen(true);
+    }
+  }, []);
 
   // Live Android Clock tick
   useEffect(() => {
@@ -593,59 +605,13 @@ export default function App() {
     return paragraphs.slice(-3);
   };
 
-  // Direct Client-Side (Opsi 1): Process recap directly from browser when user API key is provided
-  const requestRecapWithFallback = async (payload: RecapPayload): Promise<{ script: string }> => {
-    const isKieAi = payload.model?.startsWith("gemini-3") && (payload.model.includes("-5-") || payload.model.includes("-6-") || payload.model.includes("-7-") || payload.model.includes("-8-"));
-    const hasUserKey = isKieAi ? !!payload.kieApiKey?.trim() : !!payload.googleApiKey?.trim();
-
-    // Direct Client-Side: When API key is provided, execute directly from browser to Google / Kie.ai
-    // Bypasses server 404, eliminates payload size limits, and ensures 100% compatibility on any hosting (Vercel, Netlify, PWA)
-    if (hasUserKey) {
-      console.log("[Mangaroot] Menjalankan pemrosesan naskah langsung dari browser (Direct Client-Side Mode)...");
-      return await generateRecapDirect(payload);
-    }
-
-    // Fallback: If no personal key entered, attempt backend route (for server-configured keys)
-    try {
-      const response = await fetch("/api/recap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-
-      // If 404 (backend Express not running on static deploy like Vercel)
-      if (response.status === 404) {
-        throw new Error("Server backend (/api/recap) tidak ditemukan (404). Silakan masukkan API Key Anda di menu Setelan agar naskah diproses langsung dari browser Anda.");
-      }
-
-      let errMsg = "Gagal melakukan generate naskah.";
-      try {
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const errData = await response.json();
-          errMsg = errData.error || errMsg;
-        } else {
-          const textErr = await response.text();
-          errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
-        }
-      } catch {
-        errMsg = `Server Error (${response.status})`;
-      }
-
-      throw new Error(errMsg);
-    } catch (err: any) {
-      if (!err.message || err.message.includes("Failed to fetch") || err.message.includes("NetworkError") || err.message.includes("404")) {
-        throw new Error("Server tidak dapat dihubungi. Silakan masukkan API Key Anda di menu Setelan agar aplikasi berjalan langsung dari HP / Browser Anda.");
-      }
-      throw err;
-    }
-  };
-
   const generateRecap = async (isResume: boolean = false) => {
+    if (!googleApiKey.trim()) {
+      setError("Aplikasi tidak dapat berjalan tanpa API Key Gemini. Silakan atur API Key terlebih dahulu.");
+      setIsSettingsModalOpen(true);
+      return;
+    }
+
     if (images.length === 0) {
       setError("Silakan upload minimal satu gambar manga terlebih dahulu.");
       return;
@@ -733,21 +699,43 @@ export default function App() {
               const isFirstBatch = i === 0;
               const sendInitialContext = (isFirstBatch && scriptType === "continued") ? initialContextText : "";
 
-              const data = await requestRecapWithFallback({
-                images: chunkImages,
-                model,
-                googleApiKey,
-                kieApiKey,
-                tone,
-                language,
-                customInstructions,
-                customStyleRef,
-                previousParagraphs,
-                initialContext: sendInitialContext,
-                isSuperConcise,
-                characterDetails
+              const response = await fetch("/api/recap", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  images: chunkImages,
+                  model,
+                  googleApiKey,
+                  kieApiKey,
+                  tone,
+                  language,
+                  customInstructions,
+                  customStyleRef,
+                  previousParagraphs,
+                  initialContext: sendInitialContext,
+                  isSuperConcise,
+                  characterDetails
+                })
               });
 
+              if (!response.ok) {
+                let errMsg = "Gagal melakukan generate naskah.";
+                try {
+                  const contentType = response.headers.get("content-type");
+                  if (contentType && contentType.includes("application/json")) {
+                    const errData = await response.json();
+                    errMsg = errData.error || errMsg;
+                  } else {
+                    const textErr = await response.text();
+                    errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
+                  }
+                } catch (e) {
+                  errMsg = `Server Error (${response.status})`;
+                }
+                throw new Error(errMsg);
+              }
+
+              const data = await response.json();
               batchScript = data.script.trim();
               success = true;
               break;
@@ -826,20 +814,42 @@ export default function App() {
         setResumeAccumulatedScript("");
 
         setGenerationProgress("Menganalisis panel...");
-        const data = await requestRecapWithFallback({
-          images: imagesPayload,
-          model,
-          googleApiKey,
-          kieApiKey,
-          tone,
-          language,
-          customInstructions,
-          customStyleRef,
-          initialContext: scriptType === "continued" ? initialContextText : "",
-          isSuperConcise,
-          characterDetails
+        const response = await fetch("/api/recap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            images: imagesPayload,
+            model,
+            googleApiKey,
+            kieApiKey,
+            tone,
+            language,
+            customInstructions,
+            customStyleRef,
+            initialContext: scriptType === "continued" ? initialContextText : "",
+            isSuperConcise,
+            characterDetails
+          })
         });
 
+        if (!response.ok) {
+          let errMsg = "Gagal melakukan generate naskah.";
+          try {
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+              const errData = await response.json();
+              errMsg = errData.error || errMsg;
+            } else {
+              const textErr = await response.text();
+              errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
+            }
+          } catch (e) {
+            errMsg = `Server Error (${response.status})`;
+          }
+          throw new Error(errMsg);
+        }
+
+        const data = await response.json();
         setCurrentScriptText(data.script);
         
         const firstImgName = images[0]?.name.replace(/\.[^/.]+$/, "") || "Manga";
@@ -1121,6 +1131,22 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                 <Trash2 className="w-4 h-4" />
               </button>
             )}
+
+            {/* Tombol Pengaturan API Key Sudut Kanan Atas */}
+            <button
+              onClick={() => setIsSettingsModalOpen(true)}
+              className={`relative p-2 rounded-xl border transition-all active:scale-90 cursor-pointer flex items-center justify-center ${
+                !googleApiKey.trim()
+                  ? "bg-rose-500/20 border-rose-500/50 text-rose-300 animate-pulse shadow-lg shadow-rose-950/40"
+                  : "bg-slate-800/80 hover:bg-slate-700/80 border-slate-700 text-slate-300 hover:text-white"
+              }`}
+              title="Pengaturan API Key"
+            >
+              <Settings className="w-4 h-4" />
+              {!googleApiKey.trim() && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+              )}
+            </button>
             
             <div className="px-2.5 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-bold text-indigo-400 uppercase tracking-[0.15em] font-mono select-none">
               v1.5
@@ -1187,19 +1213,20 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
               /* Swipeable Horizontal Scroller of manga page previews */
               <div className="flex items-center gap-3 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden shrink-0 select-none">
                 {images.map((img, index) => {
-                  const imageSrc = (img.url || img.base64 || "").trim();
+                  const imageSrc = (img.url && img.url.trim() !== "") ? img.url : ((img.base64 && img.base64.trim() !== "") ? img.base64 : null);
                   return (
                     <div key={img.id} className="relative w-20 h-28 rounded-xl border border-slate-850 bg-slate-950 overflow-hidden shadow-md shrink-0 active:scale-95 transition-transform group">
                       {imageSrc ? (
                         <img 
                           src={imageSrc} 
-                          alt={img.name || `Halaman ${index + 1}`} 
+                          alt={img.name} 
                           className="w-full h-full object-cover pointer-events-none" 
                           loading="lazy"
                         />
                       ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-slate-500 text-[10px] font-mono">
-                          <span>#{index + 1}</span>
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 p-2 text-slate-500">
+                          <FileImage className="w-6 h-6 mb-1 text-slate-600" />
+                          <span className="text-[8px] font-mono truncate max-w-full">{img.name}</span>
                         </div>
                       )}
                       
@@ -1271,50 +1298,26 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                   />
                 </div>
 
-                {/* API Keys Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">AI Studio Project Key</label>
-                      <a 
-                        href="https://aistudio.google.com/app/apikey" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 flex items-center gap-1 transition-colors"
-                      >
-                        <HelpCircle className="w-2.5 h-2.5" />
-                        Get Key
-                      </a>
+                {/* Status API Key & Akses Modal Pengaturan */}
+                <div className="flex items-center justify-between p-3.5 bg-slate-950/80 border border-slate-800 rounded-2xl">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${googleApiKey.trim() ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400 animate-pulse"}`}>
+                      <Key className="w-4 h-4" />
                     </div>
-                    <input
-                      type="password"
-                      placeholder="Optional (System Connected)"
-                      value={googleApiKey}
-                      onChange={(e) => setGoogleApiKey(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Kie.ai Project Key</label>
-                      <a 
-                        href="https://kie.ai/id/api-key" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 flex items-center gap-1 transition-colors"
-                      >
-                        <HelpCircle className="w-2.5 h-2.5" />
-                        Get Key
-                      </a>
+                    <div>
+                      <p className="text-xs font-bold text-slate-200">Gemini API Key</p>
+                      <p className="text-[10px] text-slate-400">
+                        {googleApiKey.trim() ? "Terkonfigurasi & Aktif" : "Belum diisi (Aplikasi Terkunci)"}
+                      </p>
                     </div>
-                    <input
-                      type="password"
-                      placeholder="••••••••••••••••"
-                      value={kieApiKey}
-                      onChange={(e) => setKieApiKey(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans"
-                    />
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsModalOpen(true)}
+                    className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white rounded-xl text-[10px] font-bold uppercase font-mono tracking-wider transition active:scale-95 cursor-pointer shadow-md"
+                  >
+                    Atur API Key
+                  </button>
                 </div>
 
                 {/* Model Selection */}
@@ -1740,29 +1743,40 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                   <div className="flex flex-col gap-4 select-text">
                     {parseRecapScript(currentScriptText).map((p) => {
                       const correspondingImg = images[p.index - 1];
-                      const imgSrc = correspondingImg ? (correspondingImg.url || correspondingImg.base64 || "").trim() : "";
                       return (
                         <div key={p.index} className="bg-slate-900/40 border border-slate-800/60 rounded-[1.5rem] p-4 flex gap-4 relative hover:border-indigo-500/30 transition-all group">
                           <div className="shrink-0 flex flex-col gap-2 items-center">
-                            {correspondingImg && imgSrc ? (
-                              <div 
-                                onClick={() => setFullscreenImageUrl(imgSrc)}
-                                className="w-16 h-24 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-xl cursor-zoom-in active:scale-95 transition-all group-hover:border-indigo-500/50"
-                                title="Expand image"
-                              >
-                                <img 
-                                  src={imgSrc} 
-                                  alt={correspondingImg.name || `Halaman ${p.index}`}
-                                  className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
-                                  referrerPolicy="no-referrer"
-                                />
-                                <div className="absolute inset-0 bg-indigo-950/10 flex items-end">
-                                  <span className="w-full text-center py-1 bg-slate-950/90 text-[8px] font-black font-mono text-indigo-400 uppercase tracking-widest">
-                                    PG #{p.index}
-                                  </span>
+                            {correspondingImg ? (() => {
+                              const scriptImgSrc = (correspondingImg.url && correspondingImg.url.trim() !== "") ? correspondingImg.url : ((correspondingImg.base64 && correspondingImg.base64.trim() !== "") ? correspondingImg.base64 : null);
+                              return (
+                                <div 
+                                  onClick={() => {
+                                    if (scriptImgSrc) setFullscreenImageUrl(scriptImgSrc);
+                                  }}
+                                  className={`w-16 h-24 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-xl ${scriptImgSrc ? 'cursor-zoom-in active:scale-95 group-hover:border-indigo-500/50' : 'cursor-default'} transition-all`}
+                                  title={scriptImgSrc ? "Expand image" : undefined}
+                                >
+                                  {scriptImgSrc ? (
+                                    <img 
+                                      src={scriptImgSrc} 
+                                      alt={correspondingImg.name}
+                                      className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  ) : (
+                                    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900/60 text-slate-600">
+                                      <FileImage className="w-5 h-5 mb-1 text-slate-700" />
+                                      <span className="text-[7px] font-mono">No Src</span>
+                                    </div>
+                                  )}
+                                  <div className="absolute inset-0 bg-indigo-950/10 flex items-end pointer-events-none">
+                                    <span className="w-full text-center py-1 bg-slate-950/90 text-[8px] font-black font-mono text-indigo-400 uppercase tracking-widest">
+                                      PG #{p.index}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
-                            ) : (
+                              );
+                            })() : (
                               <div className="w-14 h-20 rounded-lg border border-dashed border-slate-800 bg-slate-950/40 flex items-center justify-center">
                                 <span className="text-[8px] font-mono text-slate-600">No Img</span>
                               </div>
@@ -2053,7 +2067,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       )}
 
       {/* FULL SCREEN IMAGE PREVIEW MODAL */}
-      {fullscreenImageUrl && fullscreenImageUrl.trim() !== "" && (
+      {Boolean(fullscreenImageUrl && fullscreenImageUrl.trim()) && (
         <div 
           onClick={() => setFullscreenImageUrl(null)}
           className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer animate-fadeIn"
@@ -2070,7 +2084,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           </div>
           
           <img 
-            src={fullscreenImageUrl.trim()} 
+            src={fullscreenImageUrl!} 
             alt="Manga Preview" 
             className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-slate-800"
             referrerPolicy="no-referrer"
@@ -2082,6 +2096,16 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
 
       {/* Offline Connectivity Status Pill */}
       <OfflineIndicator />
+
+      {/* API Key Settings Modal */}
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        googleApiKey={googleApiKey}
+        setGoogleApiKey={setGoogleApiKey}
+        kieApiKey={kieApiKey}
+        setKieApiKey={setKieApiKey}
+      />
 
     </div>
   );

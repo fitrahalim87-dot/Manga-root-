@@ -19,9 +19,8 @@ export interface RecapPayload {
 export async function generateRecapDirect(payload: RecapPayload): Promise<{ script: string }> {
   const {
     images,
-    model = "gemini-2.0-flash",
+    model = "gemini-2.5-flash",
     googleApiKey = "",
-    kieApiKey = "",
     tone = "dramatic",
     language = "id",
     customInstructions = "",
@@ -36,12 +35,10 @@ export async function generateRecapDirect(payload: RecapPayload): Promise<{ scri
     throw new Error("Tidak ada gambar manga yang diunggah.");
   }
 
-  // Determine model type and select correct key
-  const isKieAi = model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-"));
-  const apiKey = (isKieAi ? kieApiKey.trim() : googleApiKey.trim());
+  const apiKey = googleApiKey.trim();
 
   if (!apiKey) {
-    throw new Error(`API Key untuk ${isKieAi ? "Kie.ai" : "Google Gemini"} belum diisi. Silakan isi di menu Setelan (Engine Config).`);
+    throw new Error("API Key Google Gemini belum diisi. Silakan isi di menu Setelan (Engine Config).");
   }
 
   // Sort images by globalIndex or filename
@@ -244,9 +241,6 @@ ${characterDetails}
   });
 
   let endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  if (isKieAi) {
-    endpoint = `https://api.kie.ai/gemini/v1/models/${model}:streamGenerateContent`;
-  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -255,13 +249,8 @@ ${characterDetails}
   if (apiKey.startsWith("ya29.")) {
     headers["Authorization"] = `Bearer ${apiKey}`;
   } else {
-    if (!isKieAi) {
-      endpoint += `?key=${encodeURIComponent(apiKey)}`;
-      headers["x-goog-api-key"] = apiKey;
-    } else {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-      headers["x-goog-api-key"] = apiKey;
-    }
+    endpoint += `?key=${encodeURIComponent(apiKey)}`;
+    headers["x-goog-api-key"] = apiKey;
   }
 
   const requestBody = {
@@ -299,49 +288,15 @@ ${characterDetails}
   let scriptText = "";
   const rawResponseText = await response.text();
 
-  if (isKieAi) {
-    try {
-      const json = JSON.parse(rawResponseText);
-      if (Array.isArray(json)) {
-        json.forEach(chunk => {
-          scriptText += chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        });
-      } else {
-        scriptText = json.candidates?.[0]?.content?.parts?.[0]?.text || json.text || "";
-      }
-    } catch (e) {
-      const hasSsePrefix = rawResponseText.includes("data:");
-      const chunks = hasSsePrefix
-        ? rawResponseText.split("data:").filter(c => c.trim() !== "")
-        : rawResponseText.split("\n").filter(c => c.trim() !== "");
-
-      chunks.forEach(chunk => {
-        let cleanChunk = chunk.trim();
-        if (cleanChunk === "[DONE]") return;
-        if (cleanChunk.startsWith("[")) cleanChunk = cleanChunk.substring(1).trim();
-        if (cleanChunk.startsWith(",")) cleanChunk = cleanChunk.substring(1).trim();
-        if (cleanChunk.endsWith("]")) cleanChunk = cleanChunk.substring(0, cleanChunk.length - 1).trim();
-        if (!cleanChunk) return;
-        try {
-          const json = JSON.parse(cleanChunk);
-          const partText = json.candidates?.[0]?.content?.parts?.[0]?.text || json.text || "";
-          scriptText += partText;
-        } catch (err) {
-          // ignore chunk parse error
-        }
-      });
+  try {
+    const data = JSON.parse(rawResponseText);
+    if (data.candidates?.[0]?.finishReason === "SAFETY") {
+      throw new Error("Gagal menghasilkan naskah: Konten diblokir oleh filter keamanan AI.");
     }
-  } else {
-    try {
-      const data = JSON.parse(rawResponseText);
-      if (data.candidates?.[0]?.finishReason === "SAFETY") {
-        throw new Error("Gagal menghasilkan naskah: Konten diblokir oleh filter keamanan AI.");
-      }
-      scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("filter keamanan")) throw e;
-      scriptText = "";
-    }
+    scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("filter keamanan")) throw e;
+    scriptText = "";
   }
 
   if (!scriptText || scriptText.trim() === "") {

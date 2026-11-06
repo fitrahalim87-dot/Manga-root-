@@ -29,13 +29,16 @@ import {
   CheckCircle2,
   Undo2,
   Settings,
-  ChevronDown
+  ChevronDown,
+  Database
 } from "lucide-react";
-import { PWAInstallButton } from "./components/PWAInstallButton";
 import JSZip from "jszip";
 import { motion, AnimatePresence } from "motion/react";
 import { MangaImage, RecapScript, ToneType, LanguageType, LengthType, ActiveSession } from "./types";
 import { saveRecapScript, getAllRecapScripts, deleteRecapScript, saveActiveSession, getActiveSession, clearActiveSession } from "./lib/db";
+import { PWAInstallButton } from "./components/PWAInstallButton";
+import { OfflineIndicator } from "./components/OfflineIndicator";
+import { DatabaseModal } from "./components/DatabaseModal";
 
 // Helper to convert base64 back to an active Blob URL for fast previewing in the current session
 function base64ToBlobUrl(base64: string): string {
@@ -303,9 +306,22 @@ export default function App() {
   const [fullscreenImageUrl, setFullscreenImageUrl] = useState<string | null>(null);
   const [isSettingsExpanded, setIsSettingsExpanded] = useState<boolean>(true);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
-  const [googleApiKey, setGoogleApiKey] = useState<string>("");
-  const [kieApiKey, setKieApiKey] = useState<string>("");
-  const [model, setModel] = useState<string>("gemini-1.5-flash");
+  const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem("mangaroot_gemini_api_key") || "";
+    } catch (_) {
+      return "";
+    }
+  });
+  const [kieApiKey, setKieApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem("mangaroot_kie_api_key") || "";
+    } catch (_) {
+      return "";
+    }
+  });
+  const [model, setModel] = useState<string>("gemini-2.5-flash");
+  const [showDatabaseModal, setShowDatabaseModal] = useState<boolean>(false);
 
   // Live Android Clock tick
   useEffect(() => {
@@ -421,7 +437,10 @@ export default function App() {
           setSeriesName(session.seriesName || "Munou na Nana (Talentless Nana)");
           setCurrentScriptTitle(session.currentScriptTitle);
           setCurrentScriptText(session.resumeAccumulatedScript);
-          setModel(session.model || "gemini-1.5-flash");
+          const restoredModel = (session.model === "gemini-1.5-flash" || session.model === "gemini-2.0-flash")
+            ? "gemini-2.5-flash"
+            : (session.model || "gemini-2.5-flash");
+          setModel(restoredModel);
           setGoogleApiKey(session.googleApiKey || "");
           setKieApiKey(session.kieApiKey || "");
           setIsSuperConcise(true);
@@ -586,6 +605,22 @@ export default function App() {
   const generateRecap = async (isResume: boolean = false) => {
     if (images.length === 0) {
       setError("Silakan upload minimal satu gambar manga terlebih dahulu.");
+      return;
+    }
+
+    const effectiveGoogleKey = googleApiKey.trim();
+    const effectiveKieKey = kieApiKey.trim();
+    const isKieModel = model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-"));
+
+    if (isKieModel && !effectiveKieKey) {
+      setError("Model Kie.ai dipilih, namun Kie.ai API Key belum diisi. Silakan masukkan API Key Kie.ai Anda di menu Pengaturan Engine.");
+      setIsSettingsExpanded(true);
+      return;
+    }
+
+    if (!isKieModel && !effectiveGoogleKey) {
+      setError("API Key Google Gemini belum diisi. Silakan masukkan API Key Anda (dapat dibuat gratis di https://aistudio.google.com/app/apikey) pada menu Pengaturan Engine di atas.");
+      setIsSettingsExpanded(true);
       return;
     }
 
@@ -990,7 +1025,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       setShowZipModal(false);
     } catch (err) {
       console.error("Gagal membuat file ZIP:", err);
-      alert("Gagal membuat file ZIP.");
+      setError("Gagal membuat file ZIP. Pastikan gambar tidak rusak dan coba lagi.");
     } finally {
       setIsZipping(false);
     }
@@ -999,7 +1034,10 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
   const loadScriptFromHistory = (item: RecapScript) => {
     setCurrentScriptTitle(item.title);
     setCurrentScriptText(item.script);
-    setModel(item.model);
+    const restoredHistoryModel = (item.model === "gemini-1.5-flash" || item.model === "gemini-2.0-flash")
+      ? "gemini-2.5-flash"
+      : (item.model || "gemini-2.5-flash");
+    setModel(restoredHistoryModel);
     setTone(item.tone as ToneType);
     setLanguage(item.language as LanguageType);
     setTargetLength(item.targetLength as LengthType);
@@ -1093,6 +1131,17 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowDatabaseModal(true)}
+              className="px-2.5 py-1.5 text-slate-300 hover:text-rose-400 rounded-xl hover:bg-slate-800 border border-slate-800 bg-slate-900/60 transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+              title="Penyimpanan & Database IndexedDB"
+            >
+              <Database className="w-3.5 h-3.5 text-rose-500" />
+              <span className="text-[10px] font-mono font-bold text-slate-300">DB</span>
+            </button>
+
+            <PWAInstallButton variant="header" />
+
             {images.length > 0 && (
               <button
                 onClick={clearAllImages}
@@ -1103,11 +1152,8 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
               </button>
             )}
             
-            <div className="flex items-center gap-2">
-              <PWAInstallButton />
-              <div className="px-2.5 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-bold text-indigo-400 uppercase tracking-[0.15em] font-mono select-none">
-                v1.5
-              </div>
+            <div className="px-2.5 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-bold text-indigo-400 uppercase tracking-[0.15em] font-mono select-none">
+              v1.5
             </div>
           </div>
         </header>
@@ -1260,10 +1306,17 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                     </div>
                     <input
                       type="password"
-                      placeholder="Optional (System Connected)"
+                      placeholder="AIzaSy... (Tempel Google Gemini API Key Anda)"
                       value={googleApiKey}
-                      onChange={(e) => setGoogleApiKey(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setGoogleApiKey(val);
+                        try {
+                          if (val.trim()) localStorage.setItem("mangaroot_gemini_api_key", val.trim());
+                          else localStorage.removeItem("mangaroot_gemini_api_key");
+                        } catch (_) {}
+                      }}
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-mono"
                     />
                   </div>
                   <div className="flex flex-col gap-1.5">
@@ -1281,30 +1334,88 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                     </div>
                     <input
                       type="password"
-                      placeholder="••••••••••••••••"
+                      placeholder="kie-... (Tempel Kie.ai API Key Anda)"
                       value={kieApiKey}
-                      onChange={(e) => setKieApiKey(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setKieApiKey(val);
+                        try {
+                          if (val.trim()) localStorage.setItem("mangaroot_kie_api_key", val.trim());
+                          else localStorage.removeItem("mangaroot_kie_api_key");
+                        } catch (_) {}
+                      }}
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-mono"
                     />
                   </div>
                 </div>
 
-                {/* Model Selection */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Engine Model</label>
+                {/* Model Selection & Custom Input */}
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Engine Model</label>
+                    {model === "custom" || (model !== "gemini-2.5-flash" && model !== "gemini-3-6-flash" && model !== "gemini-3-7-flash" && model !== "gemini-3-8-flash") ? (
+                      <span className="text-[9px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
+                        Custom Manual Model
+                      </span>
+                    ) : model.startsWith("gemini-3-") ? (
+                      <span className="text-[9px] font-mono font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-lg border border-cyan-500/20">
+                        Wajib Kie.ai Key
+                      </span>
+                    ) : (
+                      <span className="text-[9px] font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-lg border border-indigo-500/20">
+                        Google AI Key
+                      </span>
+                    )}
+                  </div>
                   <select
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
+                    value={
+                      model === "gemini-2.5-flash" || 
+                      model === "gemini-3-6-flash" || 
+                      model === "gemini-3-7-flash" || 
+                      model === "gemini-3-8-flash"
+                        ? model 
+                        : "custom"
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "custom") {
+                        setModel("gemini-3-8-flash");
+                      } else {
+                        setModel(val);
+                      }
+                    }}
                     className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all cursor-pointer outline-none font-sans"
                   >
-                    <option value="gemini-1.5-flash">Google AI Studio (Default)</option>
-                    <optgroup label="Kie.ai Project Models">
-                      <option value="gemini-3-5-flash">3.5 Flash</option>
-                      <option value="gemini-3-6-flash">3.6 Flash</option>
-                      <option value="gemini-3-7-flash">3.7 Flash</option>
-                      <option value="gemini-3-8-flash">3.8 Flash</option>
+                    <optgroup label="Google AI Studio (Gratis & Stabil)">
+                      <option value="gemini-2.5-flash">Google Gemini 2.5 Flash (Rekomendasi Utama)</option>
                     </optgroup>
+                    <optgroup label="Kie.ai Engine">
+                      <option value="gemini-3-6-flash">Kie.ai 3.6 Flash</option>
+                      <option value="gemini-3-7-flash">Kie.ai 3.7 Flash</option>
+                      <option value="gemini-3-8-flash">Kie.ai 3.8 Flash</option>
+                    </optgroup>
+                    <option value="custom">✍️ Ketik Manual Nama Model...</option>
                   </select>
+
+                  {/* Custom Model Text Input */}
+                  {(model === "custom" || (model !== "gemini-2.5-flash" && model !== "gemini-3-6-flash" && model !== "gemini-3-7-flash" && model !== "gemini-3-8-flash")) && (
+                    <div className="flex flex-col gap-1 pt-1 animate-fadeIn">
+                      <input
+                        type="text"
+                        placeholder="Contoh: gemini-3-8-flash atau custom-model-id"
+                        value={model === "custom" ? "" : model}
+                        onChange={(e) => setModel(e.target.value.trim() || "gemini-2.5-flash")}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 text-amber-300 font-mono text-xs rounded-xl focus:border-amber-500 outline-none"
+                      />
+                      <span className="text-[9px] text-slate-400">Masukkan nama model persis sesuai endpoint API tujuan Anda.</span>
+                    </div>
+                  )}
+
+                  {model.startsWith("gemini-3-") && model !== "custom" && (
+                    <p className="text-[10px] text-cyan-400/90 leading-relaxed bg-cyan-500/5 p-2 rounded-xl border border-cyan-500/15">
+                      💡 <strong>Perhatian:</strong> Model Kie.ai memerlukan API Key dari <a href="https://kie.ai/id/api-key" target="_blank" rel="noopener noreferrer" className="underline font-bold text-cyan-300">kie.ai</a>.
+                    </p>
+                  )}
                 </div>
 
                 {/* Profil Detail Karakter & AI Helper */}
@@ -1495,6 +1606,29 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-850 text-slate-200 placeholder-slate-500 text-xs rounded-xl focus:outline-none focus:border-rose-500 min-h-[50px] max-h-[100px] resize-y font-sans leading-relaxed"
                   />
                 </div>
+
+                {/* Database & Storage Management in Settings */}
+                <div className="p-3 bg-slate-950 border border-slate-850 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-rose-500/10 rounded-xl border border-rose-500/20 text-rose-400">
+                      <Database className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-200">Database IndexedDB Lokal</p>
+                      <p className="text-[10px] text-slate-400 font-mono">Kelola Riwayat, Draft & Backup JSON</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDatabaseModal(true)}
+                    className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-bold rounded-xl transition cursor-pointer active:scale-95"
+                  >
+                    Buka DB
+                  </button>
+                </div>
+
+                {/* PWA Install in Settings */}
+                <PWAInstallButton variant="settings" />
               </div>
             )}
           </div>
@@ -1528,9 +1662,26 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                 )}
               </div>
             ) : (
-              /* PRIMARY TRIGGER ACTION BUTTON */
               images.length > 0 && (
-                <div className="animate-fadeIn">
+                <div className="animate-fadeIn space-y-2.5">
+                  {!googleApiKey.trim() && !kieApiKey.trim() && (
+                    <div 
+                      onClick={() => setIsSettingsExpanded(true)}
+                      className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between cursor-pointer hover:bg-amber-500/20 transition active:scale-[0.99]"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-amber-300">API Key Belum Diisi</p>
+                          <p className="text-[10px] text-amber-400/80">Klik untuk memasukkan Google Gemini API Key (Gratis di AI Studio)</p>
+                        </div>
+                      </div>
+                      <span className="text-[9px] font-mono font-bold text-amber-300 bg-amber-500/20 px-2.5 py-1.5 rounded-lg shrink-0">
+                        Isi Kunci
+                      </span>
+                    </div>
+                  )}
+
                   {failedBatchIndex !== null && useBatchMode ? (
                     <button
                       onClick={() => generateRecap(true)}
@@ -1562,6 +1713,21 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                     <p className="mt-1 leading-relaxed text-[11px] whitespace-pre-line">{error}</p>
                   </div>
                 </div>
+
+                {/* 1-Click Switch Button to Google Gemini if model is Kie.ai or error is Kie-related */}
+                {(model.startsWith("gemini-3-") || error.includes("Kie.ai") || error.includes("kie")) && (
+                  <button
+                    onClick={() => {
+                      setModel("gemini-2.5-flash");
+                      setError(null);
+                    }}
+                    className="w-full py-2.5 px-3 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-950/40 active:scale-98"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Ganti ke Google Gemini 2.5 Flash & Coba Lagi</span>
+                  </button>
+                )}
+
                 {failedBatchIndex !== null && (
                   <div className="flex items-center gap-2 mt-1">
                     <button
@@ -1800,7 +1966,21 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                 <History className="w-4 h-4 text-rose-500" />
                 <span className="text-xs font-bold text-slate-200 font-mono uppercase tracking-wider">Riwayat Naskah Lokal ({historyScripts.length})</span>
               </div>
-              <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isHistoryExpanded ? "rotate-180" : ""}`} />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowDatabaseModal(true);
+                  }}
+                  className="px-2 py-1 bg-slate-950 border border-slate-800 hover:border-rose-500/50 rounded-lg text-[9px] font-mono font-bold text-slate-300 hover:text-rose-400 flex items-center gap-1 transition cursor-pointer"
+                  title="Buka Pengelola Database IndexedDB"
+                >
+                  <Database className="w-3 h-3 text-rose-500" />
+                  <span>Kelola DB</span>
+                </button>
+                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isHistoryExpanded ? "rotate-180" : ""}`} />
+              </div>
             </div>
 
             {/* History panel content */}
@@ -1885,10 +2065,20 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
 
         </div>
 
-        {/* Dynamic Database Footer Status bar - Desktop Mockup Only */}
-        <footer className="h-5 px-5 border-t border-slate-900/60 bg-slate-950 text-[8px] font-mono font-bold tracking-wider text-slate-500 hidden md:flex items-center justify-between shrink-0 select-none">
-          <span>SYSTEM: INDEXEDDB ONLINE</span>
-          <span>MODEL: {model.toUpperCase()}</span>
+        {/* Dynamic Database Footer Status bar */}
+        <footer 
+          onClick={() => setShowDatabaseModal(true)}
+          className="h-6 px-5 border-t border-slate-900/60 bg-slate-950 text-[9px] font-mono font-bold tracking-wider text-slate-400 flex items-center justify-between shrink-0 select-none cursor-pointer hover:bg-slate-900/40 transition"
+          title="Klik untuk membuka Pengelola Database IndexedDB"
+        >
+          <span className="flex items-center gap-1.5 text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            INDEXEDDB: ONLINE ({historyScripts.length} NASKAH)
+          </span>
+          <span className="text-slate-400 hover:text-rose-400 flex items-center gap-1">
+            <Database className="w-3 h-3 text-rose-500" />
+            <span>KELOLA DATABASE</span>
+          </span>
         </footer>
 
       </div>
@@ -2050,6 +2240,16 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
           <span className="absolute bottom-6 text-slate-500 text-[10px] font-mono font-bold uppercase tracking-widest">Tap anywhere to dismiss</span>
         </div>
       )}
+
+      {/* OFFLINE CONNECTIVITY INDICATOR */}
+      <OfflineIndicator />
+
+      {/* DATABASE INDEXEDDB MANAGER MODAL */}
+      <DatabaseModal
+        isOpen={showDatabaseModal}
+        onClose={() => setShowDatabaseModal(false)}
+        onDataChanged={loadHistory}
+      />
 
     </div>
   );

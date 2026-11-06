@@ -57,3 +57,11 @@ export interface ActiveSession {
   googleApiKey?: string;
   kieApiKey?: string;
 }
+
+export interface CharacterPreset {
+  id: string;
+  name: string;
+  characterDetails: string;
+  customInstructions?: string;
+  updatedAt: string;
+}

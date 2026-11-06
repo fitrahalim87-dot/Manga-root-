@@ -1,4 +1,5 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
@@ -6,8 +7,12 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// Disable HMR in AI Studio environment to prevent WebSocket closed without opened errors
+process.env.DISABLE_HMR = "true";
+
 async function startServer() {
   const app = express();
+  const server = http.createServer(app);
   const PORT = 3000;
 
   // Increase payload limits for base64 images upload
@@ -39,7 +44,7 @@ async function startServer() {
     try {
       const { 
         images, 
-        model = "gemini-1.5-flash",
+        model = "gemini-2.5-flash",
         googleApiKey = "",
         kieApiKey = "",
         tone = "dramatic", 
@@ -56,14 +61,40 @@ async function startServer() {
         return res.status(400).json({ error: "No manga images uploaded or images array is empty." });
       }
 
-      // Determine model type and select correct key
-      const isKieAi = model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-"));
-      
-      const userKey = isKieAi ? kieApiKey.trim() : googleApiKey.trim();
-      const apiKey = userKey || process.env.GEMINI_API_KEY;
+      // Automatically migrate legacy/deprecated models to the current gemini-2.5-flash
+      let actualModel = model;
+      if (actualModel === "gemini-1.5-flash" || actualModel === "gemini-2.0-flash") {
+        actualModel = "gemini-2.5-flash";
+      }
 
-      if (!apiKey) {
-        throw new Error(`API Key untuk ${isKieAi ? "Kie.ai" : "Google Gemini"} tidak dikonfigurasi. Silakan isi di menu Setelan.`);
+      // Determine model type and select correct key
+      const isKieAi = actualModel.startsWith("gemini-3") && (actualModel.includes("-5-") || actualModel.includes("-6-") || actualModel.includes("-7-") || actualModel.includes("-8-"));
+      
+      const rawUserKey = (isKieAi ? kieApiKey : googleApiKey) || "";
+      const userKey = typeof rawUserKey === "string" ? rawUserKey.trim().replace(/^["']|["']$/g, "") : "";
+      const rawEnvKey = (process.env.GEMINI_API_KEY || "").trim().replace(/^["']|["']$/g, "");
+      const effectiveEnvKey = (rawEnvKey && rawEnvKey !== "MY_GEMINI_API_KEY" && rawEnvKey !== "MY_KIE_AI_API_KEY") ? rawEnvKey : "";
+      
+      const apiKey = userKey || effectiveEnvKey;
+
+      if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "MY_KIE_AI_API_KEY") {
+        return res.status(400).json({
+          error: `API Key untuk ${isKieAi ? "Kie.ai" : "Google Gemini"} belum diisi. Silakan buka menu Pengaturan Engine di atas dan masukkan API Key Anda. Jika menggunakan model ${model}, Anda memerlukan API Key dari ${isKieAi ? "Kie.ai (kie.ai/id/api-key)" : "Google AI Studio (aistudio.google.com/app/apikey)"}.`
+        });
+      }
+
+      // Detect if user pasted a Google AI Studio key (starts with AIzaSy) into Kie.ai model request
+      if (isKieAi && apiKey.startsWith("AIzaSy")) {
+        return res.status(400).json({
+          error: `Model yang Anda pilih (${model}) adalah model pihak ketiga dari Kie.ai, namun kunci yang digunakan adalah Google Gemini API Key (diawali 'AIzaSy...'). Silakan ubah pilihan model ke 'Google Gemini 2.5 Flash' di menu Engine Model untuk menggunakan kunci Google Anda, atau masukkan API Key Kie.ai yang valid dari https://kie.ai/id/api-key.`
+        });
+      }
+
+      // Detect if user pasted a Kie key into Google model request
+      if (!isKieAi && apiKey.startsWith("kie-")) {
+        return res.status(400).json({
+          error: `Model yang Anda pilih (${actualModel}) adalah model Google AI Studio, namun kunci yang digunakan adalah API Key Kie.ai (diawali 'kie-...'). Silakan pilih model Kie.ai di menu dropdown atau masukkan Google Gemini API Key Anda.`
+        });
       }
 
       // Sort images by filename or globalIndex if available
@@ -274,9 +305,14 @@ ${characterDetails}
       ];
 
       sortedImages.forEach((img, idx) => {
-        let base64Data = img.base64;
+        let base64Data = img.base64 || "";
         if (base64Data.includes(";base64,")) {
           base64Data = base64Data.split(";base64,").pop() || "";
+        }
+        base64Data = base64Data.trim();
+        if (!base64Data) {
+          console.warn(`Peringatan: Gambar ${img.name} tidak memiliki data base64 yang valid, dilewati.`);
+          return;
         }
         
         // Sequence labeling to guarantee Gemini knows exactly which image is which
@@ -285,20 +321,22 @@ ${characterDetails}
           text: `[BERIKUT ADALAH GAMBAR PANEL UNTUK DIANALISIS: GAMBAR ${labelIndex} (Nama file: ${img.name})]`
         });
 
+        let cleanMime = (img.mimeType || "image/jpeg").toLowerCase().trim();
+        if (cleanMime === "image/jpg") cleanMime = "image/jpeg";
+        if (!cleanMime.startsWith("image/")) cleanMime = "image/jpeg";
+
         contentParts.push({
           inlineData: {
             data: base64Data,
-            mimeType: img.mimeType || "image/jpeg"
+            mimeType: cleanMime
           }
         });
       });
 
-      console.log(`Processing recap request for model: ${model}`);
+      console.log(`Processing recap request for model: ${actualModel} (requested: ${model})`);
 
       // Determine endpoint and headers
-      let endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-      
-      let actualModel = model;
+      let endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${actualModel}:generateContent`;
 
       if (isKieAi) {
         endpoint = `https://api.kie.ai/gemini/v1/models/${actualModel}:streamGenerateContent`;
@@ -337,16 +375,50 @@ ${characterDetails}
 
       console.log(`Sending request to endpoint: ${endpoint} (Model: ${model})`);
 
-      const response = await fetch(endpoint, {
+      let response = await fetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody)
       });
 
+      // Auto retry once for transient 503 (high demand) or 429 (rate limit)
+      if ((response.status === 503 || response.status === 429) && !isKieAi) {
+        console.warn(`Transient ${response.status} spike detected for ${actualModel}. Retrying in 1.5s...`);
+        await new Promise(r => setTimeout(r, 1500));
+        response = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(requestBody)
+        });
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`API Error (${response.status}) for ${model}:`, errorText);
-        throw new Error(`API Error (${response.status}): ${errorText}`);
+        console.error(`API Error (${response.status}) for ${actualModel}:`, errorText);
+
+        let userFriendlyMsg = "";
+        try {
+          const errObj = JSON.parse(errorText);
+          if (errObj.error?.message) {
+            userFriendlyMsg = errObj.error.message;
+          }
+        } catch (_) {}
+
+        if (response.status === 400 && (errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid"))) {
+          return res.status(400).json({
+            error: "API Key Google Gemini tidak valid atau belum diaktifkan. Silakan periksa kembali API Key Anda dari Google AI Studio (https://aistudio.google.com/app/apikey) dan pastikan diawali dengan 'AIzaSy'."
+          });
+        }
+
+        if (response.status === 403) {
+          return res.status(403).json({
+            error: `Akses ditolak (403): ${userFriendlyMsg || "Permission Denied"}. Pastikan API Key Anda memiliki izin untuk menggunakan model ${actualModel}.`
+          });
+        }
+
+        return res.status(response.status).json({
+          error: userFriendlyMsg ? `Google AI Error: ${userFriendlyMsg}` : `API Error (${response.status}): ${errorText.substring(0, 200)}`
+        });
       }
 
       let scriptText = "";
@@ -359,6 +431,30 @@ ${characterDetails}
         // Try parsing as a pure JSON object/array first
         try {
           const json = JSON.parse(rawResponseText);
+
+          // Check if Kie.ai returned an error code inside HTTP 200 payload
+          if (json && !Array.isArray(json) && json.code && json.code !== 200) {
+            const kieMsg = json.msg || json.message || "Autentikasi gagal";
+            if (json.code === 401) {
+              return res.status(401).json({
+                error: `Autentikasi Kie.ai Gagal (401): ${kieMsg}. API Key Kie.ai Anda tidak valid atau belum diisi. Jika Anda memiliki Google Gemini API Key (AIzaSy...), silakan ubah pilihan model ke 'Google Gemini 2.5 Flash' di menu Engine Model.`
+              });
+            }
+            if (json.code === 402) {
+              return res.status(402).json({
+                error: `Kredit Kie.ai Habis (402): ${kieMsg}. Saldo/kuota akun Kie.ai Anda tidak mencukupi. Silakan isi ulang di portal https://kie.ai atau beralih ke model 'Google Gemini 2.5 Flash'.`
+              });
+            }
+            if (json.code === 404) {
+              return res.status(404).json({
+                error: `Model ${model} tidak ditemukan di Kie.ai (404): ${kieMsg}. Silakan beralih ke model 'Google Gemini 2.5 Flash'.`
+              });
+            }
+            return res.status(400).json({
+              error: `Error dari Kie.ai (${json.code}): ${kieMsg}`
+            });
+          }
+
           if (Array.isArray(json)) {
             json.forEach(chunk => {
               scriptText += chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -409,7 +505,12 @@ ${characterDetails}
 
       if (!scriptText || scriptText.trim() === "") {
         console.error(`Empty script text for ${model}. Raw response:`, rawResponseText.substring(0, 1000));
-        throw new Error(`Gagal menghasilkan naskah dari model ${model}: Respons kosong atau tidak valid. Pastikan API Key benar dan model didukung.`);
+        const hint = isKieAi
+          ? `Layanan Kie.ai tidak mengembalikan teks naskah. Pastikan API Key Kie.ai Anda aktif di https://kie.ai, atau ubah pilihan model ke 'Google Gemini 2.5 Flash'.`
+          : `Pastikan gambar manga terbaca dengan jelas dan API Key Google Gemini Anda valid.`;
+        return res.status(500).json({
+          error: `Gagal menghasilkan naskah dari model ${model}: Respons kosong atau tidak valid. ${hint}`
+        });
       }
 
       // Post-processing: clean up any special characters or markdown from narrative lines
@@ -504,7 +605,10 @@ ${characterDetails}
   // Serve static files and integrate Vite in development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -516,7 +620,7 @@ ${characterDetails}
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });
 }

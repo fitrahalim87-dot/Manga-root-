@@ -265,10 +265,10 @@ SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
    - JANGAN PERNAH menggunakan deskripsi fisik (misal: "pria berambut kuning") jika karakter tersebut sudah ada di referensi. Gunakan NAMA mereka.
    - Jika ada karakter baru yang tidak ada di referensi, beri nama deskriptif sementara yang konsisten (misal: "Bos Mafia" atau "Gadis Misterius").
 
-2. ATURAN EMAS "ANTI-BERTELE-TELE":
-   - DILARANG KERAS melompati gambar. Setiap gambar yang dikirimkan HARUS memiliki narasi ceritanya masing-masing.
-   - DILARANG KERAS menggunakan frasa pengantar visual seperti: "Dalam gambar ini...", "Terlihat...", "Panel ini menunjukkan...", "Kamera menyorot...", "Suasana menjadi...".
-   - LANGSUNG ke inti aksi/kejadian. 
+2. ATURAN EMAS "ANTI-BERTELE-TELE" & KELENGKAPAN:
+   - DILARANG KERAS melompati gambar. Anda WAJIB menyertakan SEMUA tag [GAMBAR X] dari awal sampai akhir batch tanpa terkecuali.
+   - DILARANG KERAS menggunakan frasa pengantar visual seperti: "Dalam gambar ini...", "Terlihat...", "Panel ini menunjukkan...".
+   - LANGSUNG ke inti aksi/kejadian.
    - Contoh Salah: "Terlihat Takemichi sedang panik melihat Hina menangis."
    - Contoh Benar: "Takemichi seketika panik dan berusaha menenangkan Hina yang mulai menangis tersedu-sedu."
 
@@ -369,7 +369,7 @@ ${characterDetails}
         ],
         generationConfig: {
           temperature: 0.85,
-          maxOutputTokens: 8192
+          maxOutputTokens: 16384
         }
       };
 

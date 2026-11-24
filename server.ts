@@ -15,9 +15,9 @@ async function startServer() {
   const server = http.createServer(app);
   const PORT = 3000;
 
-  // Increase payload limits for base64 images upload
-  app.use(express.json({ limit: "60mb" }));
-  app.use(express.urlencoded({ limit: "60mb", extended: true }));
+  // Remove payload limits for base64 manga images upload
+  app.use(express.json({ limit: Infinity }));
+  app.use(express.urlencoded({ limit: Infinity, extended: true }));
 
   // Lazy initialize Gemini Client to avoid module load time crash if key is missing
   let aiInstance: GoogleGenAI | null = null;
@@ -39,14 +39,256 @@ async function startServer() {
     return aiInstance;
   }
 
+  // Helper to safely extract non-thought text from Gemini/Kie parts arrays
+  function extractPartsText(parts: any): string {
+    if (!Array.isArray(parts)) return "";
+    return parts
+      .filter((p: any) => p && !p.thought && typeof p.text === "string")
+      .map((p: any) => p.text)
+      .join("");
+  }
+
+  // Helper to sanitize user-provided API key
+  function cleanApiKey(rawKey: unknown): string {
+    if (typeof rawKey !== "string") return "";
+    return rawKey.trim().replace(/^["']|["']$/g, "");
+  }
+
+  // API endpoint to test API Key connection for Google AI Studio, Kie.ai, and OpenRouter
+  app.post("/api/test-key", async (req, res) => {
+    try {
+      const { provider = "google", apiKey: rawKey = "", model = "" } = req.body || {};
+      const apiKey = cleanApiKey(rawKey);
+
+      if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "MY_KIE_AI_API_KEY") {
+        return res.status(400).json({
+          ok: false,
+          error: "API Key masih kosong. Silakan masukkan API Key terlebih dahulu."
+        });
+      }
+
+      if (provider === "google") {
+        if (apiKey.startsWith("sk-or-")) {
+          return res.status(400).json({
+            ok: false,
+            error: "Key yang dimasukkan terlihat seperti OpenRouter API Key (sk-or-...), bukan Google AI Studio Key (AIzaSy...)."
+          });
+        }
+        if (apiKey.startsWith("kie-")) {
+          return res.status(400).json({
+            ok: false,
+            error: "Key yang dimasukkan terlihat seperti Kie.ai API Key (kie-...), bukan Google AI Studio Key (AIzaSy...)."
+          });
+        }
+
+        const headers: Record<string, string> = {};
+        let url = "https://generativelanguage.googleapis.com/v1beta/models";
+        if (apiKey.startsWith("ya29.")) {
+          headers["Authorization"] = `Bearer ${apiKey}`;
+        } else {
+          url += `?key=${encodeURIComponent(apiKey)}`;
+        }
+
+        const resp = await fetch(url, { method: "GET", headers });
+        const text = await resp.text();
+        let data: any = null;
+        try {
+          data = JSON.parse(text);
+        } catch (_) {}
+
+        if (!resp.ok) {
+          const msg = data?.error?.message || text.substring(0, 200);
+          if (resp.status === 400 || msg.includes("API_KEY_INVALID") || msg.includes("API key not valid")) {
+            return res.status(400).json({
+              ok: false,
+              error: `API Key Google AI Studio tidak valid (${resp.status}): ${msg}`
+            });
+          }
+          return res.status(resp.status).json({
+            ok: false,
+            error: `Google AI Studio error (${resp.status}): ${msg}`
+          });
+        }
+
+        const modelsList: string[] = Array.isArray(data?.models)
+          ? data.models.map((m: any) => String(m.name || "").replace(/^models\//, ""))
+          : [];
+
+        return res.json({
+          ok: true,
+          message: `Koneksi Google AI Studio berhasil! Key aktif (${modelsList.length} model tersedia).`,
+          availableModels: modelsList.slice(0, 25)
+        });
+      }
+
+      if (provider === "kie") {
+        if (apiKey.startsWith("AIzaSy")) {
+          return res.status(400).json({
+            ok: false,
+            error: "Key yang dimasukkan terlihat seperti Google AI Studio Key (AIzaSy...), bukan Kie.ai API Key."
+          });
+        }
+        if (apiKey.startsWith("sk-or-")) {
+          return res.status(400).json({
+            ok: false,
+            error: "Key yang dimasukkan terlihat seperti OpenRouter API Key (sk-or-...), bukan Kie.ai API Key."
+          });
+        }
+
+        const testModel = (typeof model === "string" && model.trim()) ? model.trim() : "gemini-3-8-flash";
+        const nativeTestModel = testModel.replace(/-openai$/i, "");
+        const openAiTestSlug = testModel.endsWith("-openai") ? testModel : `${testModel}-openai`;
+        const testRoutes = [
+          {
+            url: `https://api.kie.ai/${encodeURIComponent(openAiTestSlug)}/v1/chat/completions`,
+            body: {
+              messages: [{ role: "user", content: "Balas OK" }],
+              stream: false
+            }
+          },
+          {
+            url: `https://api.kie.ai/gemini/v1/models/${encodeURIComponent(nativeTestModel)}:streamGenerateContent`,
+            body: {
+              stream: true,
+              contents: [{ role: "user", parts: [{ text: "Balas OK" }] }]
+            }
+          },
+          {
+            url: `https://api.kie.ai/${encodeURIComponent(nativeTestModel)}/v1/chat/completions`,
+            body: {
+              messages: [{ role: "user", content: "Balas OK" }],
+              stream: false
+            }
+          }
+        ];
+
+        let resp: globalThis.Response | null = null;
+        let rawText = "";
+        let json: any = null;
+
+        for (let attempt = 0; attempt < testRoutes.length; attempt++) {
+          const route = testRoutes[attempt];
+          resp = await fetch(route.url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`,
+              "x-goog-api-key": apiKey
+            },
+            body: JSON.stringify(route.body)
+          });
+
+          rawText = await resp.text();
+          json = null;
+          try {
+            json = JSON.parse(rawText);
+          } catch (_) {}
+
+          const isTransientKie =
+            [404, 422, 429, 500, 502, 503, 504].includes(resp.status) ||
+            (json && !Array.isArray(json) && [404, 422, 429, 500, 502, 503, 504].includes(Number(json.code)));
+
+          if (isTransientKie && attempt < testRoutes.length - 1) {
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
+          break;
+        }
+
+        if (!resp!.ok) {
+          const msg = json?.msg || json?.message || json?.error?.message || rawText.substring(0, 200);
+          return res.status(resp!.status).json({
+            ok: false,
+            error: `Koneksi Kie.ai gagal (${resp!.status}): ${msg}`
+          });
+        }
+
+        if (json && !Array.isArray(json) && json.code && json.code !== 200) {
+          const kieCode = Number(json.code);
+          const kieMsg = json.msg || json.message || "Autentikasi gagal";
+          const httpStatus = kieCode >= 500 ? 503 : kieCode === 429 ? 429 : 400;
+          return res.status(httpStatus).json({
+            ok: false,
+            error: kieCode >= 500
+              ? `Server Kie.ai sedang sibuk/gangguan (${kieCode}): ${kieMsg}. Coba lagi beberapa saat atau gunakan Google AI Studio / OpenRouter.`
+              : `Kie.ai error (${kieCode}): ${kieMsg}`
+          });
+        }
+
+        return res.json({
+          ok: true,
+          message: `Koneksi Kie.ai berhasil! API Key aktif dan terverifikasi (${testModel}).`
+        });
+      }
+
+      if (provider === "openrouter") {
+        if (apiKey.startsWith("AIzaSy")) {
+          return res.status(400).json({
+            ok: false,
+            error: "Key yang dimasukkan terlihat seperti Google AI Studio Key (AIzaSy...), bukan OpenRouter API Key (sk-or-...)."
+          });
+        }
+        if (apiKey.startsWith("kie-")) {
+          return res.status(400).json({
+            ok: false,
+            error: "Key yang dimasukkan terlihat seperti Kie.ai Key (kie-...), bukan OpenRouter API Key (sk-or-...)."
+          });
+        }
+
+        const resp = await fetch("https://openrouter.ai/api/v1/auth/key", {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "HTTP-Referer": "https://aistudio.google.com",
+            "X-Title": "Mangaroot Creator Studio"
+          }
+        });
+
+        const rawText = await resp.text();
+        let json: any = null;
+        try {
+          json = JSON.parse(rawText);
+        } catch (_) {}
+
+        if (!resp.ok) {
+          const msg = json?.error?.message || json?.message || rawText.substring(0, 200);
+          return res.status(resp.status).json({
+            ok: false,
+            error: `API Key OpenRouter tidak valid (${resp.status}): ${msg}`
+          });
+        }
+
+        const keyInfo = json?.data;
+        const limitText = typeof keyInfo?.limit_remaining === "number"
+          ? ` (Sisa kredit: $${keyInfo.limit_remaining.toFixed(2)})`
+          : "";
+
+        return res.json({
+          ok: true,
+          message: `Koneksi OpenRouter berhasil! API Key aktif${limitText}.`
+        });
+      }
+
+      return res.status(400).json({ ok: false, error: `Provider tidak dikenal: ${provider}` });
+    } catch (err: any) {
+      console.error("Test API Key Error:", err);
+      return res.status(500).json({
+        ok: false,
+        error: err?.message || "Gagal menguji koneksi API Key."
+      });
+    }
+  });
+
   // API endpoint to generate manga recap scripts
   app.post("/api/recap", async (req, res) => {
     try {
       const { 
         images, 
-        model = "gemini-2.5-flash",
+        provider,
+        model = "gemini-4-hydrogen",
         googleApiKey = "",
         kieApiKey = "",
+        openrouterApiKey = "",
         tone = "dramatic", 
         language = "id", 
         customInstructions = "",
@@ -61,39 +303,60 @@ async function startServer() {
         return res.status(400).json({ error: "No manga images uploaded or images array is empty." });
       }
 
-      // Automatically migrate legacy/deprecated models to the current gemini-2.5-flash
-      let actualModel = model;
-      if (actualModel === "gemini-1.5-flash" || actualModel === "gemini-2.0-flash") {
-        actualModel = "gemini-2.5-flash";
+      // Determine provider explicitly first, with safe fallback inference
+      let resolvedProvider: "google" | "kie" | "openrouter";
+      if (provider === "google" || provider === "kie" || provider === "openrouter") {
+        resolvedProvider = provider;
+      } else if (typeof model === "string" && (model.includes("/") || model.startsWith("openai/") || model.startsWith("anthropic/") || model.startsWith("google/") || model.startsWith("deepseek/"))) {
+        resolvedProvider = "openrouter";
+      } else if (typeof model === "string" && model.startsWith("gemini-3") && (model.includes("-6-") || model.includes("-7-") || model.includes("-8-"))) {
+        resolvedProvider = "kie";
+      } else {
+        resolvedProvider = "google";
       }
 
-      // Determine model type and select correct key
-      const isKieAi = actualModel.startsWith("gemini-3") && (actualModel.includes("-5-") || actualModel.includes("-6-") || actualModel.includes("-7-") || actualModel.includes("-8-"));
+      const isOpenRouter = resolvedProvider === "openrouter";
+      const isKieAi = resolvedProvider === "kie";
+      const isGoogleAI = resolvedProvider === "google";
+
+      let actualModel = typeof model === "string" ? model.trim() : "";
+      if (isGoogleAI) {
+        actualModel = actualModel.replace(/^models\//i, "").replace(/^google\//i, "");
+        if (!actualModel || actualModel === "custom" || actualModel === "gemini-1.5-flash" || actualModel === "gemini-2.0-flash" || actualModel === "gemini-3-flash") {
+          actualModel = "gemini-4-hydrogen";
+        }
+      } else if (isOpenRouter) {
+        if (!actualModel || actualModel === "custom" || actualModel === "google/gemini-3-flash" || actualModel === "gemini-3-flash") {
+          actualModel = "google/gemini-4-hydrogen";
+        } else if (!actualModel.includes("/")) {
+          actualModel = `google/${actualModel}`;
+        }
+      } else if (isKieAi) {
+        if (!actualModel || actualModel === "custom") {
+          actualModel = "gemini-3-8-flash";
+        }
+      }
+
+      // Select correct key according to active provider
+      const rawUserKey = isOpenRouter ? openrouterApiKey : (isKieAi ? kieApiKey : googleApiKey);
+      const userKey = cleanApiKey(rawUserKey);
       
-      const rawUserKey = (isKieAi ? kieApiKey : googleApiKey) || "";
-      const userKey = typeof rawUserKey === "string" ? rawUserKey.trim().replace(/^["']|["']$/g, "") : "";
-      const rawEnvKey = (process.env.GEMINI_API_KEY || "").trim().replace(/^["']|["']$/g, "");
+      const rawEnvKey = cleanApiKey(process.env.GEMINI_API_KEY);
       const effectiveEnvKey = (rawEnvKey && rawEnvKey !== "MY_GEMINI_API_KEY" && rawEnvKey !== "MY_KIE_AI_API_KEY") ? rawEnvKey : "";
       
-      const apiKey = userKey || effectiveEnvKey;
+      const apiKey = userKey || (isGoogleAI ? effectiveEnvKey : "");
+
+      const providerName = isOpenRouter ? "OpenRouter" : (isKieAi ? "Kie.ai" : "Google AI Studio");
 
       if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey === "MY_KIE_AI_API_KEY") {
         return res.status(400).json({
-          error: `API Key untuk ${isKieAi ? "Kie.ai" : "Google Gemini"} belum diisi. Silakan buka menu Pengaturan Engine di atas dan masukkan API Key Anda. Jika menggunakan model ${model}, Anda memerlukan API Key dari ${isKieAi ? "Kie.ai (kie.ai/id/api-key)" : "Google AI Studio (aistudio.google.com/app/apikey)"}.`
+          error: `API Key untuk ${providerName} belum diisi. Silakan klik tombol Pengaturan (Setting) di pojok kanan atas dan masukkan API Key Anda.`
         });
       }
 
-      // Detect if user pasted a Google AI Studio key (starts with AIzaSy) into Kie.ai model request
-      if (isKieAi && apiKey.startsWith("AIzaSy")) {
+      if (isGoogleAI && (apiKey.startsWith("kie-") || apiKey.startsWith("sk-or-"))) {
         return res.status(400).json({
-          error: `Model yang Anda pilih (${model}) adalah model pihak ketiga dari Kie.ai, namun kunci yang digunakan adalah Google Gemini API Key (diawali 'AIzaSy...'). Silakan ubah pilihan model ke 'Google Gemini 2.5 Flash' di menu Engine Model untuk menggunakan kunci Google Anda, atau masukkan API Key Kie.ai yang valid dari https://kie.ai/id/api-key.`
-        });
-      }
-
-      // Detect if user pasted a Kie key into Google model request
-      if (!isKieAi && apiKey.startsWith("kie-")) {
-        return res.status(400).json({
-          error: `Model yang Anda pilih (${actualModel}) adalah model Google AI Studio, namun kunci yang digunakan adalah API Key Kie.ai (diawali 'kie-...'). Silakan pilih model Kie.ai di menu dropdown atau masukkan Google Gemini API Key Anda.`
+          error: `API Key yang tersimpan di Google AI Studio bukan key Google (terdeteksi key ${apiKey.startsWith("sk-or-") ? "OpenRouter" : "Kie.ai"}). Periksa kembali pengaturan API Key Anda.`
         });
       }
 
@@ -111,7 +374,7 @@ async function startServer() {
         - Gunakan kata sapaan "gua", "lu", "kita", "anjir", "gitu".
         - Gunakan kata "cuy" secara ALAMI dan JARANG (hanya sebagai penekanan di akhir poin penting, jangan di setiap kalimat).
         - Sering membandingkan karakter dengan penonton (misal: "MC yang jomblo kayak kalian ini").
-        - Alur penceritaan harus mengalir, satu paragraf bisa mencakup 1-2 gambar sekaligus agar tidak terputus-putus.
+        - Alur penceritaan antar tag [GAMBAR X] harus mengalir nyambung seperti satu cerita utuh tanpa terasa terputus-putus, namun setiap gambar tetap wajib memiliki tag [GAMBAR X] masing-masing.
         - Fokus pada penyampaian yang ekspresif namun tetap efisien.`,
         formal: "Bahasa Indonesia yang baik dan benar, formal, sopan, deskriptif secara elegan, dan menggunakan kosakata yang baku namun tetap menarik untuk narasi dokumenter.",
         humorous: "Sangat lucu, penuh candaan, menyisipkan punchline gokil, sindiran jenaka terhadap kebodohan karakter, dan menggunakan diksi yang memancing tawa.",
@@ -134,22 +397,22 @@ Setelah itu datanglah Tatsumi Aoi yang dia ini cewek paling cantik di universita
 Singkat cerita si Mondo ini diminta tolong sama si Aoi dan Aoi ini mengajaknya untuk pergi bersamanya sebentar. Karena terlalu polosnya si Mondo ini mengiyakan saja.
 
 [GAMBAR 4]
-Ternyata si Aoi ini mengajak Mondo untuk minum di sebuah bar. Dikarenakan Mondo yang enggak pernah minum ngebuat dia ini mabuk brutal. Si Mondo benar-benar syok dan panik karena ia enggak membayangkan kalau sifat dari Aoi itu seseram ini cuy.
+Ternyata si Aoi ini mengajak Mondo untuk minum di sebuah bar. Dikarenakan Mondo yang enggak pernah minum ngebuat dia ini mabuk brutal. Si Mondo benar-benar kaget dan panik karena ia enggak membayangkan kalau sifat dari Aoi itu seseram ini cuy.
       `;
 
       // Map video lengths
-      const languageLabel = language === "id" ? "Bahasa Indonesia" : "Bahasa Inggris";
       const langInstruction = language === "id" 
         ? "Tulis seluruh naskah dalam Bahasa Indonesia yang ekspresif, asik, tidak kaku, menggunakan gaya bercerita sudut pandang orang ketiga (third-person storyteller) yang mengalir lancar seperti spoiler anime/film di YouTube." 
         : "Tulis seluruh naskah dalam Bahasa Inggris yang murni bergaya spoiler recap cerita orang ketiga (third-person storytelling).";
 
-      const expectedHeaders = sortedImages.map((img, idx) => `[GAMBAR ${img.globalIndex !== undefined ? img.globalIndex : (idx + 1)}]`);
+      const expectedIndices = sortedImages.map((img, idx) => (img.globalIndex !== undefined ? img.globalIndex : (idx + 1)));
+      const expectedHeaders = expectedIndices.map((num) => `[GAMBAR ${num}]`);
       const headersListString = expectedHeaders.join(", ");
 
       // Dynamic example format based on actual image count
       const formatExample = sortedImages.map((img, idx) => {
-        const labelIndex = img.globalIndex !== undefined ? img.globalIndex : (idx + 1);
-        return `[GAMBAR ${labelIndex}]\n[Tulis narasi spoiler yang sangat padat, seru, dan langsung ke inti adegan untuk GAMBAR ${labelIndex} (${img.name}) di sini...]`;
+        const labelIndex = expectedIndices[idx];
+        return `[GAMBAR ${labelIndex}]\nTulis narasi spoiler untuk gambar ${labelIndex} di sini...`;
       }).join("\n\n");
 
       let continuityPrompt = "";
@@ -167,12 +430,12 @@ Ternyata si Aoi ini mengajak Mondo untuk minum di sebuah bar. Dikarenakan Mondo 
 =========================================
 PENTING - KESINAMBUNGAN ALUR CERITA DARI BATCH SEBELUMNYA:
 Cerita yang akan Anda buat di bawah ini adalah kelanjutan langsung dari halaman manga sebelumnya. 
-Berikut adalah 2 PARAGRAF TERAKRAF (Terakhir) dari naskah batch sebelumnya sebagai referensi Anda agar ceritanya tersambung secara mulus dan berurutan:
+Berikut adalah 2-3 PARAGRAF TERAKHIR dari naskah batch sebelumnya sebagai referensi Anda agar ceritanya tersambung secara mulus dan berurutan:
 ---
-${previousParagraphs.map((p, idx) => `[Paragraf Sebelumnya #${idx + 1}]:\n${p}`).join("\n\n")}
+${previousParagraphs.map((p: string, idx: number) => `[Paragraf Sebelumnya #${idx + 1}]:\n${p}`).join("\n\n")}
 ---
 TUGAS ANDA:
-Lanjutkan alur cerita di atas secara berkesinambungan dan mulus mulai dari Gambar pertama pada batch ini.
+Lanjutkan alur cerita di atas secara berkesinambungan dan mulus mulai dari Gambar pertama pada batch ini (${expectedHeaders[0]}).
 - Hubungkan kalimat pembuka naskah batch ini secara mulus dari akhir cerita di atas.
 - JANGAN mengulangi cerita, dialog, atau aksi yang sudah diceritakan pada referensi paragraf sebelumnya di atas.
 - JANGAN menambahkan kalimat/frasa pembuka seperti "Cerita dimulai" atau "Cerita berlanjut" karena ini adalah kelanjutan halaman di tengah-tengah naskah, bukan awal naskah.
@@ -203,14 +466,6 @@ TUGAS ANDA (MANDATORY):
 - Tetap patuhi aturan TIDAK menggunakan dialog langsung maupun efek suara/tanda kutip ganda ("").
 =========================================\n`;
       }
-
-      // Generate dynamically tailored example starting phrase
-      const exampleStartPhrase = isFirstScript
-        ? (requiredPrefix === "The story continues" ? "The story continues when" 
-           : requiredPrefix === "The story begins" ? "The story begins when"
-           : requiredPrefix === "Cerita berlanjut" ? "Cerita berlanjut saat"
-           : "Cerita dimulai saat")
-        : (language === "en" ? "Meanwhile," : "Di sisi lain,");
 
       const exampleText = language === "en" 
         ? `[GAMBAR 1]
@@ -246,7 +501,7 @@ Takemichi mulai panik membayangkan kemarahan Hina, sementara Chifuyu hanya menat
       // Detailed prompt for generating a top-tier manga recap script
       const brevityInstruction = isSuperConcise 
         ? "WAJIB SANGAT RINGKAS: Maksimal 1-2 kalimat pendek per gambar. Fokus hanya pada 'Plot Beat' utama. Jangan deskripsikan visual latar belakang jika tidak ada aksi penting."
-        : "MODE DETAIL: Narasikan setiap kejadian secara mendalam, ekspresif, dan emosional. Ceritakan detail aksi, dialog penting (dalam bentuk narasi), dan perubahan suasana di setiap panel. DILARANG KERAS melompati adegan atau gambar. Pastikan naskah terasa lengkap dan mencakup seluruh alur cerita yang terlihat.";
+        : "MODE DETAIL: Narasikan setiap kejadian di SETIAP gambar secara mendalam, ekspresif, dan emosional (2-4 kalimat per gambar). Ceritakan detail aksi, dialog penting (dalam bentuk narasi tidak langsung), dan perubahan suasana di setiap panel. DILARANG KERAS melompati atau menggabungkan gambar.";
 
       const promptText = `
 Anda adalah seorang Script Writer profesional dan spesialis pembuat naskah recap manga (spoiler alur cerita) terbaik di YouTube yang berspesialisasi dalam gaya penceritaan yang "Direct, Fast-Paced, and Narrative-Focused".
@@ -258,6 +513,13 @@ ${brevityInstruction}
 
 ${continuityPrompt}
 
+DAFTAR TAG GAMBAR WAJIB UNTUK BATCH INI (${sortedImages.length} PANEL):
+Anda HARUS menghasilkan tepat ${sortedImages.length} bagian secara berurutan dengan tag persis berikut:
+${headersListString}
+
+STRUKTUR OUTPUT WAJIB:
+${formatExample}
+
 SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
 
 1. IDENTIFIKASI KARAKTER (MANDATORY):
@@ -265,12 +527,12 @@ SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
    - JANGAN PERNAH menggunakan deskripsi fisik (misal: "pria berambut kuning") jika karakter tersebut sudah ada di referensi. Gunakan NAMA mereka.
    - Jika ada karakter baru yang tidak ada di referensi, beri nama deskriptif sementara yang konsisten (misal: "Bos Mafia" atau "Gadis Misterius").
 
-2. ATURAN EMAS "ANTI-BERTELE-TELE" & KELENGKAPAN:
-   - DILARANG KERAS melompati gambar. Anda WAJIB menyertakan SEMUA tag [GAMBAR X] dari awal sampai akhir batch tanpa terkecuali.
+2. ATURAN EMAS KELENGKAPAN & ANTI-TERPOTONG (KRUSIAL):
+   - WAJIB menyertakan SEMUA ${sortedImages.length} tag dari ${expectedHeaders[0]} sampai ${expectedHeaders[expectedHeaders.length - 1]} tanpa terkecuali.
+   - DILARANG menggabungkan beberapa gambar ke dalam satu tag (contoh terlarang: [GAMBAR 1-3] atau [GAMBAR 2, 3]). Tulis satu blok terpisah untuk setiap tag [GAMBAR X].
+   - Meskipun sebuah gambar hanya berupa transisi singkat atau ekspresi wajah, tetap tulis minimal 1 kalimat narasi yang menyambung alur untuk tag [GAMBAR X] tersebut.
    - DILARANG KERAS menggunakan frasa pengantar visual seperti: "Dalam gambar ini...", "Terlihat...", "Panel ini menunjukkan...".
    - LANGSUNG ke inti aksi/kejadian.
-   - Contoh Salah: "Terlihat Takemichi sedang panik melihat Hina menangis."
-   - Contoh Benar: "Takemichi seketika panik dan berusaha menenangkan Hina yang mulai menangis tersedu-sedu."
 
 3. GAYA BAHASA (NARRATIVE FLOW):
    - Gunakan kata kerja aktif.
@@ -281,8 +543,9 @@ SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
    - DILARANG menulis kata/frasa penutup, kesimpulan, atau kalimat yang mengakhiri cerita (seperti "Kisah ini ditutup...").
    - DILARANG menggunakan tanda baca khusus seperti (*), ("), (_), (~), atau backtick. Cukup huruf, angka, titik, dan koma.
    - DILARANG menyapa penonton ("halo guys", "simak terus").
+   - DILARANG KERAS menulis tanda sitasi, sumber, atau catatan kaki seperti [cite 1], [cite 1, 2], [citation 1], atau [1] di dalam maupun di akhir kalimat.
 
-CONTOH FORMAT DAN GAYA YANG DIHARAPKAN (IKUTI GAYA INI):
+CONTOH GAYA NARASI YANG DIHARAPKAN (IKUTI GAYA INI):
 ${effectiveExample}
 
 Berikut adalah parameter konten tambahan:
@@ -299,250 +562,540 @@ ${characterDetails}
 ---` : ""}
 `;
 
-      // Format content parts for standard Google GenAI SDK (multimodal)
-      const contentParts: any[] = [
-        { text: promptText }
-      ];
-
-      sortedImages.forEach((img, idx) => {
-        let base64Data = img.base64 || "";
-        if (base64Data.includes(";base64,")) {
-          base64Data = base64Data.split(";base64,").pop() || "";
-        }
-        base64Data = base64Data.trim();
-        if (!base64Data) {
-          console.warn(`Peringatan: Gambar ${img.name} tidak memiliki data base64 yang valid, dilewati.`);
-          return;
-        }
-        
-        // Sequence labeling to guarantee Gemini knows exactly which image is which
-        const labelIndex = img.globalIndex !== undefined ? img.globalIndex : (idx + 1);
-        contentParts.push({
-          text: `[BERIKUT ADALAH GAMBAR PANEL UNTUK DIANALISIS: GAMBAR ${labelIndex} (Nama file: ${img.name})]`
-        });
-
-        let cleanMime = (img.mimeType || "image/jpeg").toLowerCase().trim();
-        if (cleanMime === "image/jpg") cleanMime = "image/jpeg";
-        if (!cleanMime.startsWith("image/")) cleanMime = "image/jpeg";
-
-        contentParts.push({
-          inlineData: {
-            data: base64Data,
-            mimeType: cleanMime
+      const buildImageParts = (targetImages: typeof sortedImages) => {
+        const parts: any[] = [];
+        targetImages.forEach((img, idx) => {
+          let base64Data = img.base64 || "";
+          if (base64Data.includes(";base64,")) {
+            base64Data = base64Data.split(";base64,").pop() || "";
           }
-        });
-      });
+          base64Data = base64Data.trim();
+          if (!base64Data) {
+            console.warn(`Peringatan: Gambar ${img.name} tidak memiliki data base64 yang valid, dilewati.`);
+            return;
+          }
 
-      console.log(`Processing recap request for model: ${actualModel} (requested: ${model})`);
+          const labelIndex = img.globalIndex !== undefined ? img.globalIndex : (idx + 1);
+          parts.push({
+            text: `[GAMBAR PANEL #${labelIndex} | File: ${img.name} — Wajib buat narasi dengan tag [GAMBAR ${labelIndex}]]`
+          });
+
+          let cleanMime = (img.mimeType || "image/jpeg").toLowerCase().trim();
+          if (cleanMime === "image/jpg") cleanMime = "image/jpeg";
+          if (!cleanMime.startsWith("image/")) cleanMime = "image/jpeg";
+
+          parts.push({
+            inlineData: {
+              data: base64Data,
+              mimeType: cleanMime
+            }
+          });
+        });
+        return parts;
+      };
+
+      console.log(`Processing recap request via ${providerName} for model: ${actualModel} (requested: ${model})`);
 
       // Determine endpoint and headers
-      let endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${actualModel}:generateContent`;
-
-      if (isKieAi) {
-        endpoint = `https://api.kie.ai/gemini/v1/models/${actualModel}:streamGenerateContent`;
-      }
+      let endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(actualModel)}:generateContent`;
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
 
-      // Authentication logic: check if key is OAuth token (ya29.) or standard API key
-      if (apiKey.startsWith("ya29.")) {
+      if (isOpenRouter) {
+        endpoint = "https://openrouter.ai/api/v1/chat/completions";
         headers["Authorization"] = `Bearer ${apiKey}`;
+        headers["HTTP-Referer"] = "https://aistudio.google.com";
+        headers["X-Title"] = "Mangaroot Creator Studio";
+      } else if (isKieAi) {
+        endpoint = `https://api.kie.ai/gemini/v1/models/${encodeURIComponent(actualModel)}:streamGenerateContent`;
+        headers["Authorization"] = `Bearer ${apiKey}`;
+        headers["x-goog-api-key"] = apiKey;
       } else {
-        // For Google REST API, key is usually a query parameter
-        if (!isKieAi) {
-          endpoint += `?key=${apiKey}`;
-        } else {
-          // For Kie AI proxy, try both common patterns
+        if (apiKey.startsWith("ya29.")) {
           headers["Authorization"] = `Bearer ${apiKey}`;
-          headers["x-goog-api-key"] = apiKey;
+        } else {
+          endpoint += `?key=${encodeURIComponent(apiKey)}`;
         }
       }
 
-      const requestBody = {
-        contents: [
+      const invokeProvider = async (partsToSend: any[]): Promise<{ ok: true; text: string } | { ok: false; status: number; error: string }> => {
+        const isGemini4 = actualModel.startsWith("gemini-4");
+
+        const buildOpenAIMessages = (parts: any[]) => [
           {
             role: "user",
-            parts: contentParts
+            content: parts.map(part => {
+              if (part.text) {
+                return { type: "text", text: part.text };
+              }
+              if (part.inlineData) {
+                return {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+                  }
+                };
+              }
+              return { type: "text", text: "" };
+            })
           }
-        ],
-        generationConfig: {
-          temperature: 0.85,
-          maxOutputTokens: 16384
+        ];
+
+        const mapKieError = (kieCodeRaw: unknown, kieMsgRaw: unknown): { ok: false; status: number; error: string; transient: boolean } => {
+          const kieCode = Number(kieCodeRaw) || 500;
+          const kieMsg = typeof kieMsgRaw === "string" && kieMsgRaw.trim() ? kieMsgRaw.trim() : "Terjadi kesalahan pada server Kie.ai";
+
+          if (kieCode === 401) {
+            return {
+              ok: false,
+              status: 401,
+              transient: false,
+              error: `Autentikasi Kie.ai Gagal (401): ${kieMsg}. API Key Kie.ai Anda tidak valid. Periksa di menu Pengaturan atau ganti provider ke Google AI Studio / OpenRouter.`
+            };
+          }
+          if (kieCode === 402) {
+            return {
+              ok: false,
+              status: 402,
+              transient: false,
+              error: `Kredit Kie.ai Habis (402): ${kieMsg}. Silakan isi ulang di portal https://kie.ai atau ganti provider ke Google AI Studio / OpenRouter.`
+            };
+          }
+          if (kieCode === 404 || kieCode === 422) {
+            return {
+              ok: false,
+              status: kieCode,
+              transient: true,
+              error: `Model ${actualModel} tidak didukung pada rute Kie.ai ini (${kieCode}): ${kieMsg}. Silakan pilih model lain atau ganti provider.`
+            };
+          }
+          if (kieCode === 429) {
+            return {
+              ok: false,
+              status: 429,
+              transient: true,
+              error: `Batas antrean Kie.ai tercapai (429): ${kieMsg}. Coba beberapa detik lagi atau beralih ke Google AI Studio / OpenRouter.`
+            };
+          }
+          if (kieCode >= 500) {
+            return {
+              ok: false,
+              status: 503,
+              transient: true,
+              error: `Server Kie.ai sedang mengalami gangguan sementara (${kieCode}: ${kieMsg}). Silakan klik Lanjutkan atau coba beralih sementara ke Google AI Studio / OpenRouter.`
+            };
+          }
+          return {
+            ok: false,
+            status: 400,
+            transient: false,
+            error: `Error dari Kie.ai (${kieCode}): ${kieMsg}`
+          };
+        };
+
+        const extractAnyChunkText = (obj: any): string => {
+          if (!obj || typeof obj !== "object") return "";
+          const geminiText = extractPartsText(obj?.candidates?.[0]?.content?.parts);
+          if (geminiText) return geminiText;
+          const openAiMsg = obj?.choices?.[0]?.message?.content;
+          if (typeof openAiMsg === "string") return openAiMsg;
+          if (Array.isArray(openAiMsg)) {
+            return openAiMsg
+              .filter((c: any) => c && typeof c.text === "string")
+              .map((c: any) => c.text)
+              .join("");
+          }
+          const deltaText = obj?.choices?.[0]?.delta?.content;
+          if (typeof deltaText === "string") return deltaText;
+          if (typeof obj?.text === "string") return obj.text;
+          return "";
+        };
+
+        const nativeKieModel = actualModel.replace(/-openai$/i, "");
+        const openAiKieSlug = actualModel.endsWith("-openai") ? actualModel : `${actualModel}-openai`;
+
+        const kieRoutes = isKieAi
+          ? [
+              {
+                label: "kie-openai",
+                url: `https://api.kie.ai/${encodeURIComponent(openAiKieSlug)}/v1/chat/completions`,
+                body: {
+                  messages: buildOpenAIMessages(partsToSend),
+                  stream: false
+                }
+              },
+              {
+                label: "kie-stream",
+                url: `https://api.kie.ai/gemini/v1/models/${encodeURIComponent(nativeKieModel)}:streamGenerateContent`,
+                body: {
+                  stream: true,
+                  contents: [{ role: "user", parts: partsToSend }]
+                }
+              },
+              {
+                label: "kie-direct-openai",
+                url: `https://api.kie.ai/${encodeURIComponent(nativeKieModel)}/v1/chat/completions`,
+                body: {
+                  messages: buildOpenAIMessages(partsToSend),
+                  stream: false
+                }
+              },
+              {
+                label: "kie-v1beta",
+                url: `https://api.kie.ai/gemini/v1beta/models/${encodeURIComponent(nativeKieModel)}:generateContent`,
+                body: {
+                  contents: [{ role: "user", parts: partsToSend }]
+                }
+              }
+            ]
+          : [];
+
+        let defaultRequestBody: any = null;
+        if (isOpenRouter) {
+          defaultRequestBody = {
+            model: actualModel,
+            messages: buildOpenAIMessages(partsToSend),
+            temperature: 0.85,
+            max_tokens: 16384
+          };
+        } else if (!isKieAi) {
+          // Google AI Studio: avoid deprecated sampling parameters on gemini-4-* and omit restrictive maxOutputTokens so thinking tokens never truncate output
+          const genConfig: Record<string, any> = {};
+          if (!isGemini4) {
+            genConfig.temperature = 0.85;
+          }
+          defaultRequestBody = {
+            contents: [{ role: "user", parts: partsToSend }],
+            ...(Object.keys(genConfig).length > 0 ? { generationConfig: genConfig } : {})
+          };
         }
+
+        const maxServerAttempts = isKieAi ? kieRoutes.length : 3;
+        let lastFailure: { ok: false; status: number; error: string } = {
+          ok: false,
+          status: 503,
+          error: `Gagal terhubung ke ${providerName}. Silakan coba lagi.`
+        };
+        let preferredFailure: { ok: false; status: number; error: string } | null = null;
+        const recordFailure = (f: { ok: false; status: number; error: string }) => {
+          lastFailure = f;
+          if ([429, 500, 502, 503, 504].includes(f.status) && !preferredFailure) {
+            preferredFailure = f;
+          }
+        };
+
+        for (let serverAttempt = 1; serverAttempt <= maxServerAttempts; serverAttempt++) {
+          const activeRoute = isKieAi ? kieRoutes[serverAttempt - 1] : null;
+          const targetEndpoint = activeRoute ? activeRoute.url : endpoint;
+          const targetBody = activeRoute ? activeRoute.body : defaultRequestBody;
+
+          console.log(`Sending request to ${providerName} (Model: ${actualModel}${activeRoute ? `, Route: ${activeRoute.label}` : ""}, Attempt ${serverAttempt}/${maxServerAttempts})`);
+
+          const response = await fetch(targetEndpoint, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(targetBody)
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            let userFriendlyMsg = "";
+            try {
+              const errObj = JSON.parse(errorText);
+              if (errObj.error?.message) {
+                userFriendlyMsg = errObj.error.message;
+              } else if (errObj.message || errObj.msg) {
+                userFriendlyMsg = errObj.message || errObj.msg;
+              }
+            } catch (_) {}
+
+            const isTransientStatus = [429, 500, 502, 503, 504].includes(response.status) || (isKieAi && [404, 422].includes(response.status));
+            if (isTransientStatus && serverAttempt < maxServerAttempts) {
+              if ([429, 500, 502, 503, 504].includes(response.status)) {
+                recordFailure({
+                  ok: false,
+                  status: response.status >= 500 ? 503 : response.status,
+                  error: userFriendlyMsg ? `${providerName} Error (${response.status}): ${userFriendlyMsg}` : `Server ${providerName} sedang gangguan (${response.status}).`
+                });
+              }
+              console.log(`Switching from ${activeRoute?.label || providerName} (HTTP ${response.status}) to next route in 1000ms...`);
+              await new Promise(r => setTimeout(r, 1000));
+              continue;
+            }
+            if (isKieAi && [404, 422].includes(response.status) && preferredFailure) {
+              return preferredFailure;
+            }
+
+            if (isGoogleAI && response.status === 400 && (errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid"))) {
+              return {
+                ok: false,
+                status: 400,
+                error: "API Key Google AI Studio tidak valid atau belum diaktifkan. Silakan cek & tes ulang key Anda di menu Pengaturan."
+              };
+            }
+            if (response.status === 401) {
+              return {
+                ok: false,
+                status: 401,
+                error: `Autentikasi ${providerName} gagal (401): ${userFriendlyMsg || "API Key tidak valid atau kadaluarsa."}`
+              };
+            }
+            if (response.status === 402) {
+              return {
+                ok: false,
+                status: 402,
+                error: `Saldo/Kredit ${providerName} habis (402): ${userFriendlyMsg || "Silakan periksa saldo/kuota akun Anda."}`
+              };
+            }
+            if (response.status === 403) {
+              return {
+                ok: false,
+                status: 403,
+                error: `Akses ${providerName} ditolak (403): ${userFriendlyMsg || "Permission Denied"}. Pastikan API Key memiliki izin untuk model ${actualModel}.`
+              };
+            }
+            if (response.status === 404) {
+              return {
+                ok: false,
+                status: 404,
+                error: `Model "${actualModel}" tidak ditemukan di ${providerName} (404). ${userFriendlyMsg ? `Detail: ${userFriendlyMsg}. ` : ""}Coba pilih model lain di menu Engine atau ketik nama model yang sesuai.`
+              };
+            }
+            return {
+              ok: false,
+              status: response.status,
+              error: userFriendlyMsg ? `${providerName} Error: ${userFriendlyMsg}` : `${providerName} Error (${response.status}): ${errorText.substring(0, 200)}`
+            };
+          }
+
+          let extractedText = "";
+          const rawResponseText = await response.text();
+
+          if (isOpenRouter) {
+            try {
+              const json = JSON.parse(rawResponseText);
+              if (json?.error?.message) {
+                const errCode = Number(json.error.code) || 400;
+                if ([429, 500, 502, 503, 504].includes(errCode) && serverAttempt < maxServerAttempts) {
+                  await new Promise(r => setTimeout(r, serverAttempt * 1200));
+                  continue;
+                }
+                return {
+                  ok: false,
+                  status: errCode,
+                  error: `OpenRouter Error: ${json.error.message}`
+                };
+              }
+              extractedText = extractAnyChunkText(json);
+            } catch (e) {
+              console.log("OpenRouter JSON parse failed, retrying if attempts remain");
+              extractedText = "";
+            }
+          } else if (isKieAi) {
+            let kieEmbeddedError: { ok: false; status: number; error: string; transient: boolean } | null = null;
+            try {
+              const json = JSON.parse(rawResponseText);
+
+              if (json && !Array.isArray(json) && json.code && json.code !== 200) {
+                kieEmbeddedError = mapKieError(json.code, json.msg || json.message);
+              } else if (json && !Array.isArray(json) && json?.error?.message) {
+                kieEmbeddedError = mapKieError(json.error.code || 500, json.error.message);
+              } else if (Array.isArray(json)) {
+                for (const chunk of json) {
+                  if (chunk?.code && chunk.code !== 200) {
+                    kieEmbeddedError = mapKieError(chunk.code, chunk.msg || chunk.message);
+                    break;
+                  }
+                  extractedText += extractAnyChunkText(chunk);
+                }
+              } else {
+                extractedText = extractAnyChunkText(json);
+              }
+            } catch (_) {
+              // Line-by-line SSE / NDJSON parser so `event:` or `id:` lines never corrupt JSON chunks
+              const lines = rawResponseText.split(/\r?\n/);
+              let jsonBuffer = "";
+              for (const rawLine of lines) {
+                let line = rawLine.trim();
+                if (!line || line.startsWith("event:") || line.startsWith("id:") || line.startsWith("retry:") || line.startsWith(":")) {
+                  continue;
+                }
+                if (line.startsWith("data:")) {
+                  line = line.slice(5).trim();
+                }
+                if (!line || line === "[DONE]" || line === "[" || line === "]") {
+                  continue;
+                }
+                if (line.startsWith(",")) line = line.slice(1).trim();
+                if (line.endsWith(",")) line = line.slice(0, -1).trim();
+
+                const candidateStr = jsonBuffer ? `${jsonBuffer}\n${line}` : line;
+                try {
+                  const json = JSON.parse(candidateStr);
+                  jsonBuffer = "";
+                  if (json && !Array.isArray(json) && json.code && json.code !== 200) {
+                    kieEmbeddedError = mapKieError(json.code, json.msg || json.message);
+                    break;
+                  }
+                  if (Array.isArray(json)) {
+                    for (const c of json) {
+                      if (c?.code && c.code !== 200) {
+                        kieEmbeddedError = mapKieError(c.code, c.msg || c.message);
+                        break;
+                      }
+                      extractedText += extractAnyChunkText(c);
+                    }
+                    if (kieEmbeddedError) break;
+                  } else {
+                    extractedText += extractAnyChunkText(json);
+                  }
+                } catch {
+                  jsonBuffer = candidateStr.length < 32768 ? candidateStr : "";
+                }
+              }
+            }
+
+            if (kieEmbeddedError) {
+              recordFailure({ ok: false, status: kieEmbeddedError.status, error: kieEmbeddedError.error });
+              if (kieEmbeddedError.transient && serverAttempt < maxServerAttempts) {
+                console.log(`Kie.ai route ${activeRoute?.label} unavailable (${kieEmbeddedError.status}), trying fallback route (${serverAttempt + 1}/${maxServerAttempts})...`);
+                await new Promise(r => setTimeout(r, 1000));
+                continue;
+              }
+              if ([404, 422].includes(kieEmbeddedError.status) && preferredFailure) {
+                return preferredFailure;
+              }
+              return lastFailure;
+            }
+          } else {
+            // Standard Google AI Studio Unary Response
+            try {
+              const data = JSON.parse(rawResponseText);
+              if (data.candidates?.[0]?.finishReason === "SAFETY") {
+                return {
+                  ok: false,
+                  status: 400,
+                  error: "Gagal menghasilkan naskah: Konten diblokir oleh filter keamanan AI. Coba ubah instruksi atau gunakan gambar lain."
+                };
+              }
+              extractedText = extractPartsText(data?.candidates?.[0]?.content?.parts);
+            } catch (_) {
+              extractedText = "";
+            }
+          }
+
+          if (!extractedText || extractedText.trim() === "") {
+            console.log(`Empty script text for ${actualModel} via ${providerName} (attempt ${serverAttempt}/${maxServerAttempts}).`);
+            const hint = `Pastikan gambar manga terbaca dengan jelas, model "${actualModel}" tersedia di ${providerName}, dan API Key aktif.`;
+            lastFailure = {
+              ok: false,
+              status: 500,
+              error: `Gagal menghasilkan naskah dari model ${actualModel} (${providerName}): Respons kosong atau tidak valid. ${hint}`
+            };
+            if (serverAttempt < maxServerAttempts) {
+              await new Promise(r => setTimeout(r, serverAttempt * 1200));
+              continue;
+            }
+            return lastFailure;
+          }
+
+          return { ok: true, text: extractedText };
+        }
+
+        return lastFailure;
       };
 
-      console.log(`Sending request to endpoint: ${endpoint} (Model: ${model})`);
+      const normalizeAndCleanScript = (rawText: string): string => {
+        // Strip model-injected inline citation markers such as [cite 1], [cite 1, 2, 9], [1], or 【1†source】 first
+        const withoutCitations = rawText
+          .replace(/\s*\[\s*(?:cite|citation|ref|source|sumber|referensi)\b[^\]]*\]/gi, "")
+          .replace(/\s*\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]/g, "")
+          .replace(/\s*【[^】]*】/g, "");
 
-      let response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestBody)
-      });
+        // Normalize bracketed tags anywhere and unbracketed tags only at start of lines so narrative prose isn't split
+        let normalized = withoutCitations
+          .replace(/\*\*\s*(\[\s*(?:GAMBAR|PANEL|HALAMAN|IMAGE)\s+[0-9\s,\-&dansampai\/]+\s*\])\s*\*\*[:]?/gi, "$1")
+          .replace(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:GAMBAR|PANEL|HALAMAN|IMAGE)\s+([0-9]+(?:\s*(?:-|dan|sampai|s\/d|&|,)\s*[0-9]+)*)\s*(?:\*\*)?\s*[:]?/gi, "\n[GAMBAR $1]\n")
+          .replace(/\[\s*(?:GAMBAR|PANEL|HALAMAN|IMAGE)\s+([0-9]+(?:\s*(?:-|dan|sampai|s\/d|&|,)\s*[0-9]+)*)\s*\]\s*[:]?/gi, "\n[GAMBAR $1]\n");
 
-      // Auto retry once for transient 503 (high demand) or 429 (rate limit)
-      if ((response.status === 503 || response.status === 429) && !isKieAi) {
-        console.warn(`Transient ${response.status} spike detected for ${actualModel}. Retrying in 1.5s...`);
-        await new Promise(r => setTimeout(r, 1500));
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(requestBody)
-        });
-      }
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`API Error (${response.status}) for ${actualModel}:`, errorText);
-
-        let userFriendlyMsg = "";
-        try {
-          const errObj = JSON.parse(errorText);
-          if (errObj.error?.message) {
-            userFriendlyMsg = errObj.error.message;
+        const cleanLines = normalized.split("\n").map(line => {
+          const trimmed = line.trim();
+          if (/^\[GAMBAR\s+[0-9\s,\-&dansampai\/]+\]$/i.test(trimmed)) {
+            return trimmed.toUpperCase();
           }
-        } catch (_) {}
+          if (!trimmed) {
+            return "";
+          }
+          let cleaned = trimmed
+            .replace(/[\*\_\~\`\"\'\“\”\‘\’\:\;\#\%\@]/g, "")
+            .replace(/\s+([.,!?])/g, "$1")
+            .replace(/\s+/g, " ")
+            .trim();
 
-        if (response.status === 400 && (errorText.includes("API_KEY_INVALID") || errorText.includes("API key not valid"))) {
-          return res.status(400).json({
-            error: "API Key Google Gemini tidak valid atau belum diaktifkan. Silakan periksa kembali API Key Anda dari Google AI Studio (https://aistudio.google.com/app/apikey) dan pastikan diawali dengan 'AIzaSy'."
-          });
+          cleaned = cleaned
+            .replace(/syok\s+berat/g, "sangat kaget")
+            .replace(/Syok\s+berat/g, "Sangat kaget")
+            .replace(/SYOK\s+BERAT/g, "SANGAT KAGET")
+            .replace(/syok/g, "kaget")
+            .replace(/Syok/g, "Kaget")
+            .replace(/SYOK/g, "KAGET");
+
+          return cleaned;
+        });
+
+        return cleanLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      };
+
+      const extractSectionsByIndex = (cleanedText: string) => {
+        const headerRegex = /^(\[GAMBAR\s+([0-9\s,\-&dansampai\/]+)\])$/gim;
+        const matches: { header: string; rawRange: string; index: number; nextIndex: number }[] = [];
+        let m: RegExpExecArray | null;
+        while ((m = headerRegex.exec(cleanedText)) !== null) {
+          matches.push({ header: m[1].toUpperCase(), rawRange: m[2], index: m.index, nextIndex: headerRegex.lastIndex });
         }
 
-        if (response.status === 403) {
-          return res.status(403).json({
-            error: `Akses ditolak (403): ${userFriendlyMsg || "Permission Denied"}. Pastikan API Key Anda memiliki izin untuk menggunakan model ${actualModel}.`
-          });
-        }
+        const coveredSet = new Set<number>();
+        const blocks: { header: string; indices: number[]; body: string }[] = [];
 
-        return res.status(response.status).json({
-          error: userFriendlyMsg ? `Google AI Error: ${userFriendlyMsg}` : `API Error (${response.status}): ${errorText.substring(0, 200)}`
-        });
-      }
+        for (let idx = 0; idx < matches.length; idx++) {
+          const cur = matches[idx];
+          const next = matches[idx + 1];
+          const body = cleanedText.substring(cur.nextIndex, next ? next.index : cleanedText.length).trim();
+          if (!body) continue;
 
-      let scriptText = "";
-      const rawResponseText = await response.text();
-
-      if (isKieAi) {
-        // Log a bit of the response for debugging if it fails
-        console.log(`Raw Kie AI response snippet: ${rawResponseText.substring(0, 200)}...`);
-        
-        // Try parsing as a pure JSON object/array first
-        try {
-          const json = JSON.parse(rawResponseText);
-
-          // Check if Kie.ai returned an error code inside HTTP 200 payload
-          if (json && !Array.isArray(json) && json.code && json.code !== 200) {
-            const kieMsg = json.msg || json.message || "Autentikasi gagal";
-            if (json.code === 401) {
-              return res.status(401).json({
-                error: `Autentikasi Kie.ai Gagal (401): ${kieMsg}. API Key Kie.ai Anda tidak valid atau belum diisi. Jika Anda memiliki Google Gemini API Key (AIzaSy...), silakan ubah pilihan model ke 'Google Gemini 2.5 Flash' di menu Engine Model.`
-              });
+          const indices: number[] = [];
+          const cleanRange = cur.rawRange.toLowerCase();
+          const rangeMatch = cleanRange.match(/(\d+)\s*(?:-|dan|sampai|s\/d)\s*(\d+)/i);
+          if (rangeMatch) {
+            const start = parseInt(rangeMatch[1], 10);
+            const end = parseInt(rangeMatch[2], 10);
+            if (!isNaN(start) && !isNaN(end) && start <= end && end - start <= 50) {
+              for (let n = start; n <= end; n++) indices.push(n);
             }
-            if (json.code === 402) {
-              return res.status(402).json({
-                error: `Kredit Kie.ai Habis (402): ${kieMsg}. Saldo/kuota akun Kie.ai Anda tidak mencukupi. Silakan isi ulang di portal https://kie.ai atau beralih ke model 'Google Gemini 2.5 Flash'.`
-              });
-            }
-            if (json.code === 404) {
-              return res.status(404).json({
-                error: `Model ${model} tidak ditemukan di Kie.ai (404): ${kieMsg}. Silakan beralih ke model 'Google Gemini 2.5 Flash'.`
-              });
-            }
-            return res.status(400).json({
-              error: `Error dari Kie.ai (${json.code}): ${kieMsg}`
-            });
-          }
-
-          if (Array.isArray(json)) {
-            json.forEach(chunk => {
-              scriptText += chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
-            });
           } else {
-            scriptText = json.candidates?.[0]?.content?.parts?.[0]?.text || json.text || "";
-          }
-        } catch (e) {
-          // If JSON parse fails, it's likely SSE or a series of JSON objects
-          // Split by "data:" if it exists, or just by lines
-          const hasSsePrefix = rawResponseText.includes("data:");
-          const chunks = hasSsePrefix 
-            ? rawResponseText.split("data:").filter(c => c.trim() !== "")
-            : rawResponseText.split("\n").filter(c => c.trim() !== "");
-
-          chunks.forEach(chunk => {
-            let cleanChunk = chunk.trim();
-            if (cleanChunk === "[DONE]") return;
-            
-            // Remove array wrappers if they exist in the chunk
-            if (cleanChunk.startsWith("[")) cleanChunk = cleanChunk.substring(1).trim();
-            if (cleanChunk.startsWith(",")) cleanChunk = cleanChunk.substring(1).trim();
-            if (cleanChunk.endsWith("]")) cleanChunk = cleanChunk.substring(0, cleanChunk.length - 1).trim();
-            if (!cleanChunk) return;
-            
-            try {
-              const json = JSON.parse(cleanChunk);
-              const partText = json.candidates?.[0]?.content?.parts?.[0]?.text || json.text || "";
-              scriptText += partText;
-            } catch (err) {
-              // Silently ignore individual chunk parse errors
+            const nums = cleanRange.match(/\d+/g);
+            if (nums) {
+              nums.forEach(s => {
+                const n = parseInt(s, 10);
+                if (!isNaN(n)) indices.push(n);
+              });
             }
-          });
-        }
-      } else {
-        // Standard Unary Response
-        try {
-          const data = JSON.parse(rawResponseText);
-          if (data.candidates?.[0]?.finishReason === "SAFETY") {
-            throw new Error("Gagal menghasilkan naskah: Konten diblokir oleh filter keamanan AI. Coba ubah instruksi atau gunakan gambar lain.");
           }
-          scriptText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        } catch (e) {
-          if (e instanceof Error && e.message.includes("filter keamanan")) throw e;
-          scriptText = ""; 
+
+          if (indices.length > 0) {
+            indices.forEach((n) => coveredSet.add(n));
+            blocks.push({ header: cur.header, indices, body });
+          }
         }
-      }
 
-      if (!scriptText || scriptText.trim() === "") {
-        console.error(`Empty script text for ${model}. Raw response:`, rawResponseText.substring(0, 1000));
-        const hint = isKieAi
-          ? `Layanan Kie.ai tidak mengembalikan teks naskah. Pastikan API Key Kie.ai Anda aktif di https://kie.ai, atau ubah pilihan model ke 'Google Gemini 2.5 Flash'.`
-          : `Pastikan gambar manga terbaca dengan jelas dan API Key Google Gemini Anda valid.`;
-        return res.status(500).json({
-          error: `Gagal menghasilkan naskah dari model ${model}: Respons kosong atau tidak valid. ${hint}`
-        });
-      }
+        return { coveredSet, blocks, matchCount: matches.length };
+      };
 
-      // Post-processing: clean up any special characters or markdown from narrative lines
-      const cleanLines = scriptText.split("\n").map(line => {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-          return trimmed;
-        }
-        if (!trimmed) {
-          return line;
-        }
-        // Remove markdown, formatting, and quotation characters
-        let cleaned = line
-          .replace(/[\*\_\~\`\"\'\“\”\‘\’\:\;\#\%\@]/g, "") // remove stars, underscores, tildes, backticks, quotes, colons, semicolons, etc.
-          .replace(/\s+/g, " "); // normalize spaces
-
-        // Ban the word "syok" and replace it with "kaget"
-        cleaned = cleaned
-          .replace(/syok\s+berat/g, "sangat kaget")
-          .replace(/Syok\s+berat/g, "Sangat kaget")
-          .replace(/SYOK\s+BERAT/g, "SANGAT KAGET")
-          .replace(/syok/g, "kaget")
-          .replace(/Syok/g, "Kaget")
-          .replace(/SYOK/g, "KAGET");
-
-        return cleaned;
-      });
-      scriptText = cleanLines.join("\n");
-
-      // Fallback post-processing: enforce "Cerita dimulai" or "Cerita berlanjut" at the very beginning of the first script
-      if (isFirstScript && requiredPrefix) {
-        const lines = scriptText.split("\n");
+      const enforceRequiredPrefix = (textToFix: string): string => {
+        if (!isFirstScript || !requiredPrefix) return textToFix;
+        const lines = textToFix.split("\n");
         let firstNarrativeLineIdx = -1;
         for (let i = 0; i < lines.length; i++) {
           const trimmed = lines[i].trim();
@@ -551,54 +1104,118 @@ ${characterDetails}
             break;
           }
         }
-        
+
         if (firstNarrativeLineIdx !== -1) {
           const originalLine = lines[firstNarrativeLineIdx].trim();
-          const lowerOriginal = originalLine.toLowerCase();
-          const lowerPrefix = requiredPrefix.toLowerCase();
-          
-          const cleanOriginal = lowerOriginal.replace(/[^a-z0-9]/g, "");
-          const cleanPrefix = lowerPrefix.replace(/[^a-z0-9]/g, "");
-          
+          const cleanOriginal = originalLine.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const cleanPrefix = requiredPrefix.toLowerCase().replace(/[^a-z0-9]/g, "");
+
           if (!cleanOriginal.startsWith(cleanPrefix)) {
             const lowerFirst = originalLine.charAt(0).toLowerCase() + originalLine.slice(1);
             const firstCharIsUpper = originalLine.charAt(0) === originalLine.charAt(0).toUpperCase() && originalLine.charAt(0) !== originalLine.charAt(0).toLowerCase();
             const textToAppend = firstCharIsUpper ? originalLine : lowerFirst;
-            
             lines[firstNarrativeLineIdx] = `${requiredPrefix}, ${textToAppend}`;
-            scriptText = lines.join("\n");
+            return lines.join("\n");
           }
+        }
+        return textToFix;
+      };
+
+      // Primary generation call
+      const primaryResult = await invokeProvider([
+        { text: promptText },
+        ...buildImageParts(sortedImages)
+      ]);
+
+      if ("error" in primaryResult) {
+        return res.status(primaryResult.status).json({ error: primaryResult.error });
+      }
+
+      let scriptText = enforceRequiredPrefix(normalizeAndCleanScript(primaryResult.text));
+      let { coveredSet, matchCount } = extractSectionsByIndex(scriptText);
+      let missingIndices = expectedIndices.filter(num => !coveredSet.has(num));
+
+      // Automatic server-side completion pass if any panels were skipped or truncated
+      const needsRepair = isSuperConcise ? matchCount === 0 : missingIndices.length > 0;
+      if (needsRepair) {
+        const targetIndicesToRepair = missingIndices.length > 0 ? missingIndices : expectedIndices;
+        const missingImages = sortedImages.filter((img, idx) => {
+          const num = img.globalIndex !== undefined ? img.globalIndex : (idx + 1);
+          return targetIndicesToRepair.includes(num);
+        });
+        const missingTagsList = targetIndicesToRepair.map(n => `[GAMBAR ${n}]`).join(", ");
+
+        console.log(`[API REPAIR] Menjalankan pelengkapan otomatis untuk panel yang terlewat: ${missingTagsList}`);
+
+        const repairPrompt = `
+Anda sebelumnya telah menulis sebagian naskah recap manga berikut:
+---
+${scriptText}
+---
+NAMUN beberapa panel gambar belum dituliskan tag-nya atau terpotong, yaitu:
+${missingTagsList}
+
+TUGAS ANDA SEKARANG (WAJIB):
+Tuliskan narasi lanjutan HANYA untuk panel-panel yang terlewat di bawah ini secara berurutan dengan gaya bahasa (${toneDescriptions[tone] || tone}) dan ${langInstruction}.
+- Wajib sertakan SEMUA tag berikut: ${missingTagsList}
+- Setiap tag harus berada di baris sendiri diikuti narasinya pada baris baru (${isSuperConcise ? "1-2 kalimat ringkas per gambar" : "2-4 kalimat detail per gambar"}).
+- JANGAN mengulang panel yang sudah ada di atas.
+- DILARANG menggunakan tanda baca (*), ("), (_), (~), atau backtick.
+- DILARANG menulis tanda sitasi seperti [cite 1], [cite 1, 2], atau [1].
+${characterDetails ? `Referensi karakter:\n${characterDetails}` : ""}
+`;
+
+        const repairResult = await invokeProvider([
+          { text: repairPrompt },
+          ...buildImageParts(missingImages)
+        ]);
+
+        if (repairResult.ok) {
+          const repairedClean = normalizeAndCleanScript(repairResult.text);
+          const origParsed = extractSectionsByIndex(scriptText);
+          const repairedParsed = extractSectionsByIndex(repairedClean);
+
+          const mergedBlocks = [...origParsed.blocks];
+          const seenIndices = new Set<number>(origParsed.coveredSet);
+
+          for (const repBlock of repairedParsed.blocks) {
+            const hasNewIndex = repBlock.indices.some(n => !seenIndices.has(n));
+            if (hasNewIndex) {
+              mergedBlocks.push(repBlock);
+              repBlock.indices.forEach(n => seenIndices.add(n));
+            }
+          }
+
+          if (mergedBlocks.length > 0) {
+            mergedBlocks.sort((a, b) => Math.min(...a.indices) - Math.min(...b.indices));
+            scriptText = enforceRequiredPrefix(mergedBlocks.map(b => `${b.header}\n${b.body}`).join("\n\n"));
+          } else {
+            scriptText = enforceRequiredPrefix(`${scriptText}\n\n${repairedClean}`.trim());
+          }
+
+          const rechecked = extractSectionsByIndex(scriptText);
+          coveredSet = rechecked.coveredSet;
+          matchCount = rechecked.matchCount;
+          missingIndices = expectedIndices.filter(num => !coveredSet.has(num));
         }
       }
 
-      // Verify that all expected headers are present in the script
+      // Final validation
       if (isSuperConcise) {
-        // In Super Concise Mode, we just check that we have at least one valid [GAMBAR ...] tag
-        const regex = /\[?\s*GAMBAR\s+[\d,\s\-dan]+\s*\]?/i;
+        const regex = /\[?\s*GAMBAR\s+[\d,\s\-dan&]+\s*\]?/i;
         if (!regex.test(scriptText)) {
-          throw new Error("Hasil naskah dari AI tidak menyertakan penanda [GAMBAR] yang valid. Sistem akan melakukan percobaan ulang otomatis.");
+          throw new Error("Hasil naskah dari AI tidak menyertakan penanda [GAMBAR] yang valid.");
         }
-      } else {
-        const missingHeaders = [];
-        for (const header of expectedHeaders) {
-          const cleanNum = header.replace(/[\[\]]/g, "").trim(); // e.g. "GAMBAR 78"
-          const escaped = cleanNum.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-          const regex = new RegExp(`\\[?\\s*${escaped}\\s*\\]?`, 'i');
-          if (!regex.test(scriptText)) {
-            missingHeaders.push(header);
-          }
-        }
-
-        if (missingHeaders.length > 0) {
-          console.warn(`[API WARNING] Naskah tidak lengkap, beberapa gambar terlewat atau terpotong: ${missingHeaders.join(", ")}`);
-          throw new Error(`Hasil naskah dari AI tidak lengkap. Gambar berikut terlewat atau terpotong: ${missingHeaders.join(", ")}. Sistem akan melakukan percobaan ulang otomatis.`);
-        }
+      } else if (missingIndices.length > 0) {
+        const missingHeaders = missingIndices.map(n => `[GAMBAR ${n}]`);
+        console.warn(`[API WARNING] Naskah masih tidak lengkap setelah pelengkapan otomatis: ${missingHeaders.join(", ")}`);
+        throw new Error(`Hasil naskah dari AI tidak lengkap. Gambar berikut terlewat atau terpotong: ${missingHeaders.join(", ")}.`);
       }
 
       return res.json({ script: scriptText });
     } catch (error: any) {
       console.error("AI Generation Error:", error);
-      res.status(500).json({ error: error.message || "Gagal memproses request AI. Pastikan API Key di panel Secrets sudah valid." });
+      res.status(500).json({ error: error.message || "Gagal memproses request AI. Pastikan API Key sudah valid." });
     }
   });
 
@@ -608,9 +1225,73 @@ ${characterDetails}
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
       },
       appType: "spa",
     });
+
+    // Prevent Vite's default client from attempting a WebSocket connection when HMR is disabled
+    app.get("/@vite/client", (_req, res) => {
+      res.setHeader("Content-Type", "application/javascript");
+      res.send(`
+        import "/node_modules/vite/dist/client/env.mjs";
+        const sheetsMap = new Map();
+        const cspNonce = "document" in globalThis ? document.querySelector("meta[property=csp-nonce]")?.nonce : undefined;
+        let lastInsertedStyle;
+        export function updateStyle(id, content) {
+          let style = sheetsMap.get(id);
+          if (!style) {
+            style = document.createElement("style");
+            style.setAttribute("type", "text/css");
+            style.setAttribute("data-vite-dev-id", id);
+            style.textContent = content;
+            if (cspNonce) style.setAttribute("nonce", cspNonce);
+            if (!lastInsertedStyle) {
+              document.head.appendChild(style);
+              setTimeout(() => { lastInsertedStyle = undefined; }, 0);
+            } else {
+              lastInsertedStyle.insertAdjacentElement("afterend", style);
+            }
+            lastInsertedStyle = style;
+          } else {
+            style.textContent = content;
+          }
+          sheetsMap.set(id, style);
+        }
+        export function removeStyle(id) {
+          const style = sheetsMap.get(id);
+          if (style) {
+            document.head.removeChild(style);
+            sheetsMap.delete(id);
+          }
+        }
+        const noop = () => {};
+        const dataMap = new Map();
+        export function createHotContext(ownerPath) {
+          if (!dataMap.has(ownerPath)) dataMap.set(ownerPath, {});
+          return {
+            get data() { return dataMap.get(ownerPath); },
+            accept: noop,
+            acceptExports: noop,
+            dispose: noop,
+            prune: noop,
+            decline: noop,
+            invalidate: noop,
+            on: noop,
+            off: noop,
+            send: noop,
+          };
+        }
+        export function injectQuery(url, queryToInject) {
+          if (url[0] !== "." && url[0] !== "/") return url;
+          const pathname = url.replace(/[?#].*$/, "");
+          const { search, hash } = new URL(url, "http://vite.dev");
+          return pathname + "?" + queryToInject + (search ? "&" + search.slice(1) : "") + (hash || "");
+        }
+        export class ErrorOverlay { constructor() {} }
+      `);
+    });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");

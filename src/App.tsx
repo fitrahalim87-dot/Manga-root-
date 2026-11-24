@@ -1,46 +1,87 @@
 import React, { useState, useEffect, useRef } from "react";
-import { 
-  FileText, 
+import {
+  FileText,
   FileImage,
-  Upload, 
-  Trash2, 
-  Copy, 
-  Check, 
-  Download, 
-  Sparkles, 
-  History, 
-  Search, 
-  RefreshCw, 
-  Clock, 
-  ChevronRight, 
-  FileEdit, 
+  UploadCloud,
+  Trash2,
+  Copy,
+  Check,
+  Download,
+  Sparkles,
+  History,
+  Search,
+  RefreshCw,
+  Clock,
+  ChevronRight,
+  FileEdit,
   Save,
   Play,
-  BookOpen,
-  Smartphone,
-  Wifi,
-  Signal,
-  Battery,
-  ArrowLeft,
   AlertCircle,
   X,
   FolderOpen,
-  HelpCircle,
-  CheckCircle2,
-  Undo2,
   Settings,
   ChevronDown,
-  Database
+  Database,
+  Globe,
+  Bot,
+  Key,
+  Home,
+  Wrench,
+  Menu
 } from "lucide-react";
 import JSZip from "jszip";
-import { motion, AnimatePresence } from "motion/react";
-import { MangaImage, RecapScript, ToneType, LanguageType, LengthType, ActiveSession } from "./types";
+import { MangaImage, RecapScript, ToneType, LanguageType, LengthType, ActiveSession, ProviderType } from "./types";
 import { saveRecapScript, getAllRecapScripts, deleteRecapScript, saveActiveSession, getActiveSession, clearActiveSession } from "./lib/db";
 import { PWAInstallButton } from "./components/PWAInstallButton";
 import { OfflineIndicator } from "./components/OfflineIndicator";
 import { DatabaseModal } from "./components/DatabaseModal";
+import { SettingsModal } from "./components/SettingsModal";
+import { ApiKeyGate } from "./components/ApiKeyGate";
+import mangaBannerThumb from "./assets/images/manga_banner_thumb_1795555618423.jpg";
 
-// Helper to convert base64 back to an active Blob URL for fast previewing in the current session
+type SidebarTab = "dashboard" | "tools" | "assets" | "riwayat";
+
+const GOOGLE_MODELS = [
+  { value: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (Default)" },
+  { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+  { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash" },
+] as const;
+
+const OPENROUTER_MODELS = [
+  { value: "google/gemini-4-hydrogen", label: "Gemini 4 Hydrogen (Default)" },
+  { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "google/gemini-3.1-flash-lite", label: "Gemini 3.1 Flash Lite" },
+  { value: "google/gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+  { value: "google/gemini-3.6-flash", label: "Gemini 3.6 Flash" },
+] as const;
+
+const KIE_MODELS = [
+  { value: "gemini-3-8-flash", label: "Kie.ai 3.8 Flash (Default)" },
+  { value: "gemini-3-7-flash", label: "Kie.ai 3.7 Flash" },
+  { value: "gemini-3-6-flash", label: "Kie.ai 3.6 Flash" },
+] as const;
+
+function getDefaultModelForProvider(p: ProviderType): string {
+  if (p === "openrouter") return "google/gemini-4-hydrogen";
+  if (p === "kie") return "gemini-3-8-flash";
+  return "gemini-4-hydrogen";
+}
+
+function getPresetModelsForProvider(p: ProviderType) {
+  if (p === "openrouter") return OPENROUTER_MODELS;
+  if (p === "kie") return KIE_MODELS;
+  return GOOGLE_MODELS;
+}
+
+function inferProviderFromModel(modelName: string): ProviderType {
+  const m = (modelName || "").trim();
+  if (m.includes("/")) return "openrouter";
+  if (m === "gemini-3-6-flash" || m === "gemini-3-7-flash" || m === "gemini-3-8-flash") return "kie";
+  return "google";
+}
+
 function base64ToBlobUrl(base64: string): string {
   try {
     if (!base64 || !base64.includes(",")) return base64;
@@ -57,19 +98,17 @@ function base64ToBlobUrl(base64: string): string {
     return URL.createObjectURL(blob);
   } catch (e) {
     console.error("Error converting base64 to blob URL:", e);
-    return base64; // Fallback to base64 if anything fails
+    return base64;
   }
 }
 
-// Helper to dynamically apply watermark label text to base64 images
 async function watermarkBase64Image(base64: string, label: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.src = base64;
     img.onload = () => {
       try {
-        // Resize image to max 1200px to ensure ultra-fast upload, API stability, and zero timeouts/truncations
-        const maxDim = 1200;
+        const maxDim = 1024;
         let width = img.width;
         let height = img.height;
         if (width > maxDim || height > maxDim) {
@@ -90,10 +129,8 @@ async function watermarkBase64Image(base64: string, label: string): Promise<stri
           resolve(base64);
           return;
         }
-        // Draw resized image
         ctx.drawImage(img, 0, 0, width, height);
 
-        // Scale badge elements based on image size to look extremely crisp and readable
         const scale = Math.max(1, Math.min(width, height) / 1000);
         const paddingX = 24 * scale;
         const paddingY = 16 * scale;
@@ -102,27 +139,22 @@ async function watermarkBase64Image(base64: string, label: string): Promise<stri
         ctx.font = `bold ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
         const textWidth = ctx.measureText(label).width;
 
-        // Rose colored dot indicator
         const dotRadius = 6 * scale;
         const gap = 12 * scale;
         const badgeWidth = textWidth + paddingX * 2 + dotRadius * 2 + gap;
         const badgeHeight = fontSize + paddingY * 2;
 
-        // Top-left position
         const x = 32 * scale;
         const y = 32 * scale;
         const radius = 12 * scale;
 
-        // Draw subtle dark backing drop shadow
         ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
         ctx.shadowBlur = 15 * scale;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 6 * scale;
 
-        // Draw dark semi-transparent glass badge background
         ctx.fillStyle = "rgba(9, 9, 11, 0.95)";
         ctx.beginPath();
-        // Fallback for roundRect if not supported by browser
         if (ctx.roundRect) {
           ctx.roundRect(x, y, badgeWidth, badgeHeight, radius);
         } else {
@@ -130,14 +162,12 @@ async function watermarkBase64Image(base64: string, label: string): Promise<stri
         }
         ctx.fill();
 
-        // Reset shadow
         ctx.shadowColor = "transparent";
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
 
-        // Draw elegant border outline
-        ctx.strokeStyle = "rgba(79, 70, 229, 0.85)"; // Indigo-600
+        ctx.strokeStyle = "rgba(0, 102, 255, 0.9)";
         ctx.lineWidth = Math.max(2, 3 * scale);
         ctx.beginPath();
         if (ctx.roundRect) {
@@ -147,20 +177,18 @@ async function watermarkBase64Image(base64: string, label: string): Promise<stri
         }
         ctx.stroke();
 
-        // Draw active indicator dot (Cyan)
         const dotX = x + paddingX + dotRadius;
         const dotY = y + badgeHeight / 2;
-        ctx.fillStyle = "#22d3ee"; // Cyan-400
+        ctx.fillStyle = "#38bdf8";
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Draw bright white label text
         ctx.fillStyle = "#ffffff";
         ctx.textBaseline = "middle";
         ctx.fillText(label, dotX + dotRadius + gap, dotY);
 
-        resolve(canvas.toDataURL("image/jpeg", 0.8));
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
       } catch (err) {
         console.error("Error watermarking canvas:", err);
         resolve(base64);
@@ -179,18 +207,24 @@ export interface ParsedParagraph {
   text: string;
 }
 
-// Parses the script block using [GAMBAR X] format or falls back to double newline splits
+function stripCitationMarkers(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/\s*\[\s*(?:cite|citation|ref|source|sumber|referensi)\b[^\]]*\]/gi, "")
+    .replace(/\s*\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]/g, "")
+    .replace(/\s*【[^】]*】/g, "")
+    .replace(/ +([.,!?])/g, "$1");
+}
+
 function parseRecapScript(text: string): ParsedParagraph[] {
   if (!text) return [];
-  
-  // Match headers like: [GAMBAR 1, 2, 3] or GAMBAR 4, 5: or [GAMBAR 6-8]
-  const regex = /\[?GAMBAR\s+([0-9\s,\\\-\&dan]+)\]?:?/gi;
-  
+  const cleanInput = stripCitationMarkers(text);
+  const regex = /\[?GAMBAR\s+([0-9\s,\\\-\&dansampai\/]+)\]?:?/gi;
   const paragraphs: ParsedParagraph[] = [];
   const matches: { header: string; rawRange: string; index: number; nextIndex: number }[] = [];
   let match;
   const activeRegex = new RegExp(regex);
-  while ((match = activeRegex.exec(text)) !== null) {
+  while ((match = activeRegex.exec(cleanInput)) !== null) {
     matches.push({
       header: match[0],
       rawRange: match[1],
@@ -198,32 +232,29 @@ function parseRecapScript(text: string): ParsedParagraph[] {
       nextIndex: activeRegex.lastIndex
     });
   }
-  
+
   if (matches.length === 0) {
-    // Fallback split by double newlines
-    return text.split(/\n\s*\n/).map((p, idx) => ({
+    return cleanInput.split(/\n\s*\n/).map((p, idx) => ({
       index: idx + 1,
       indices: [idx + 1],
       label: `Gambar ${idx + 1}`,
       text: p.trim()
     })).filter(p => p.text.length > 0);
   }
-  
+
   for (let i = 0; i < matches.length; i++) {
     const currentMatch = matches[i];
     const nextMatch = matches[i + 1];
-    
     const contentStart = currentMatch.nextIndex;
-    const contentEnd = nextMatch ? nextMatch.index : text.length;
-    const pText = text.substring(contentStart, contentEnd).trim();
-    
+    const contentEnd = nextMatch ? nextMatch.index : cleanInput.length;
+    const pText = cleanInput.substring(contentStart, contentEnd).trim();
+
     if (pText) {
       const indices: number[] = [];
       const cleanRange = currentMatch.rawRange.toLowerCase();
-      
-      const rangeRegex = /(\d+)\s*(?:-|dan|\s+sampai\s+)\s*(\d+)/i;
+      const rangeRegex = /(\d+)\s*(?:-|dan|sampai|s\/d)\s*(\d+)/i;
       const rangeMatch = cleanRange.match(rangeRegex);
-      
+
       if (rangeMatch) {
         const start = parseInt(rangeMatch[1]);
         const end = parseInt(rangeMatch[2]);
@@ -237,40 +268,34 @@ function parseRecapScript(text: string): ParsedParagraph[] {
         if (numMatches) {
           numMatches.forEach(numStr => {
             const n = parseInt(numStr);
-            if (!isNaN(n)) {
-              indices.push(n);
-            }
+            if (!isNaN(n)) indices.push(n);
           });
         }
       }
-      
+
       const primaryIndex = indices.length > 0 ? indices[0] : (i + 1);
-      
       paragraphs.push({
         index: primaryIndex,
-        indices: indices,
+        indices,
         label: `Gambar ${indices.length > 0 ? indices.join(", ") : primaryIndex}`,
         text: pText
       });
     }
   }
-  
+
   return paragraphs;
 }
 
-// Helper to get file extension from mimeType or filename
 function getFileExtension(mimeType: string, filename: string): string {
   if (mimeType.includes("png")) return "png";
   if (mimeType.includes("webp")) return "webp";
   if (mimeType.includes("gif")) return "gif";
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
-  
   const extMatch = filename.match(/\.([a-zA-Z0-9]+)$/);
   if (extMatch) return extMatch[1];
   return "jpg";
 }
 
-// Helper to convert base64 image of any type to target format
 async function convertImageToFormat(base64: string, mimeType: string, targetFormat: "jpeg" | "png"): Promise<{ base64: string; mimeType: string }> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -301,11 +326,14 @@ async function convertImageToFormat(base64: string, mimeType: string, targetForm
 }
 
 export default function App() {
-  // Mobile Android Specific States
-  const [currentTime, setCurrentTime] = useState("");
+  const [activeNav, setActiveNav] = useState<SidebarTab>("dashboard");
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   const [fullscreenImageUrl, setFullscreenImageUrl] = useState<string | null>(null);
-  const [isSettingsExpanded, setIsSettingsExpanded] = useState<boolean>(true);
+  const [isEngineExpanded, setIsEngineExpanded] = useState<boolean>(true);
+  const [showAdvancedEngine, setShowAdvancedEngine] = useState<boolean>(true);
+  const [isDetailExpanded, setIsDetailExpanded] = useState<boolean>(true);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
+
   const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
     try {
       return localStorage.getItem("mangaroot_gemini_api_key") || "";
@@ -320,19 +348,42 @@ export default function App() {
       return "";
     }
   });
-  const [model, setModel] = useState<string>("gemini-2.5-flash");
+  const [openrouterApiKey, setOpenrouterApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem("mangaroot_openrouter_api_key") || "";
+    } catch (_) {
+      return "";
+    }
+  });
+
+  const [hasEnteredStudio, setHasEnteredStudio] = useState<boolean>(false);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showDatabaseModal, setShowDatabaseModal] = useState<boolean>(false);
 
-  // Live Android Clock tick
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setCurrentTime(now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", hour12: false }));
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const [provider, setProvider] = useState<ProviderType>(() => {
+    try {
+      const g = localStorage.getItem("mangaroot_gemini_api_key") || "";
+      const or = localStorage.getItem("mangaroot_openrouter_api_key") || "";
+      const k = localStorage.getItem("mangaroot_kie_api_key") || "";
+      if (g.trim()) return "google";
+      if (or.trim()) return "openrouter";
+      if (k.trim()) return "kie";
+    } catch (_) {}
+    return "google";
+  });
+
+  const [model, setModel] = useState<string>(() => {
+    try {
+      const g = localStorage.getItem("mangaroot_gemini_api_key") || "";
+      const or = localStorage.getItem("mangaroot_openrouter_api_key") || "";
+      const k = localStorage.getItem("mangaroot_kie_api_key") || "";
+      if (g.trim()) return "gemini-4-hydrogen";
+      if (or.trim()) return "google/gemini-4-hydrogen";
+      if (k.trim()) return "gemini-3-8-flash";
+    } catch (_) {}
+    return "gemini-4-hydrogen";
+  });
+  const [isCustomModel, setIsCustomModel] = useState<boolean>(false);
 
   // Settings
   const [tone, setTone] = useState<ToneType>("dramatic");
@@ -343,31 +394,29 @@ export default function App() {
   const [characterDetails, setCharacterDetails] = useState<string>("");
   const [seriesName, setSeriesName] = useState<string>("Munou na Nana (Talentless Nana)");
 
-  // Batch Mode Settings
-  const [useBatchMode, setUseBatchMode] = useState<boolean>(false);
-  const [batchSize, setBatchSize] = useState<number>(5);
+  // Batch Mode Settings (Default: Batch Mode ON, 8 panels per batch)
+  const [useBatchMode, setUseBatchMode] = useState<boolean>(true);
+  const [batchSize, setBatchSize] = useState<number>(8);
   const cancelGenerationRef = useRef<boolean>(false);
 
   // Script Context Settings
   const [scriptType, setScriptType] = useState<"first" | "continued">("first");
   const [initialContextText, setInitialContextText] = useState<string>("");
-  const [isSuperConcise, setIsSuperConcise] = useState<boolean>(false);
+  const [isSuperConcise, setIsSuperConcise] = useState<boolean>(true);
 
   // Batch Resume State
   const [resumeBatchIndex, setResumeBatchIndex] = useState<number>(0);
   const [failedBatchIndex, setFailedBatchIndex] = useState<number | null>(null);
   const [resumeAccumulatedScript, setResumeAccumulatedScript] = useState<string>("");
-  const [currentRetryCount, setCurrentRetryCount] = useState<number>(0);
 
   // Manga Images
   const [images, setImages] = useState<MangaImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [showCharDetails, setShowCharDetails] = useState<boolean>(true);
   const [copiedPrompt, setCopiedPrompt] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Output Script
-  const [currentScriptText, setCurrentScriptText] = useState<string>(" ");
+  const [currentScriptText, setCurrentScriptText] = useState<string>("");
   const [currentScriptTitle, setCurrentScriptTitle] = useState<string>("Naskah Baru");
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<string>("");
@@ -382,8 +431,7 @@ export default function App() {
   // History State
   const [historyScripts, setHistoryScripts] = useState<RecapScript[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [isHistoryLoaded, setIsHistoryLoaded] = useState(false);
-  
+
   // Feedback
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [copiedClean, setCopiedClean] = useState(false);
@@ -396,7 +444,6 @@ export default function App() {
   const [isZipping, setIsZipping] = useState(false);
   const [zipImgFormat, setZipImgFormat] = useState<"jpg" | "png" | "original">("jpg");
 
-  // Load History on Mount
   useEffect(() => {
     loadHistory();
   }, []);
@@ -405,7 +452,6 @@ export default function App() {
     try {
       const data = await getAllRecapScripts();
       setHistoryScripts(data);
-      setIsHistoryLoaded(true);
     } catch (err) {
       console.error("Gagal memuat riwayat:", err);
     }
@@ -413,7 +459,6 @@ export default function App() {
 
   const [isSessionRestored, setIsSessionRestored] = useState(false);
 
-  // Load Active Session on Mount
   useEffect(() => {
     const loadSession = async () => {
       try {
@@ -424,8 +469,8 @@ export default function App() {
             url: img.base64 ? base64ToBlobUrl(img.base64) : img.url
           }));
           setImages(restoredImages);
-          setUseBatchMode(session.useBatchMode);
-          setBatchSize(session.batchSize);
+          setUseBatchMode(session.useBatchMode ?? true);
+          setBatchSize(session.batchSize || 8);
           setResumeBatchIndex(session.resumeBatchIndex);
           setFailedBatchIndex(session.failedBatchIndex);
           setResumeAccumulatedScript(session.resumeAccumulatedScript);
@@ -437,13 +482,19 @@ export default function App() {
           setSeriesName(session.seriesName || "Munou na Nana (Talentless Nana)");
           setCurrentScriptTitle(session.currentScriptTitle);
           setCurrentScriptText(session.resumeAccumulatedScript);
-          const restoredModel = (session.model === "gemini-1.5-flash" || session.model === "gemini-2.0-flash")
-            ? "gemini-2.5-flash"
-            : (session.model || "gemini-2.5-flash");
+
+          const rawSessionModel = session.model || "";
+          const restoredProvider: ProviderType = session.provider || inferProviderFromModel(rawSessionModel);
+          let restoredModel = rawSessionModel;
+          if (!restoredModel || restoredModel === "gemini-1.5-flash" || restoredModel === "gemini-2.0-flash" || restoredModel === "custom") {
+            restoredModel = getDefaultModelForProvider(restoredProvider);
+          }
+          setProvider(restoredProvider);
           setModel(restoredModel);
-          setGoogleApiKey(session.googleApiKey || "");
-          setKieApiKey(session.kieApiKey || "");
-          setIsSuperConcise(true);
+          const presets = getPresetModelsForProvider(restoredProvider);
+          setIsCustomModel(!presets.some((m) => m.value === restoredModel));
+
+          setIsSuperConcise(session.isSuperConcise ?? true);
           if (session.failedBatchIndex !== null) {
             setError(`Pembuatan naskah terhenti di Batch ke-${session.failedBatchIndex + 1}.`);
           }
@@ -457,7 +508,6 @@ export default function App() {
     loadSession();
   }, []);
 
-  // Auto-save session state
   useEffect(() => {
     if (!isSessionRestored) return;
 
@@ -478,9 +528,8 @@ export default function App() {
         isSuperConcise,
         characterDetails,
         seriesName,
-        model,
-        googleApiKey,
-        kieApiKey
+        provider,
+        model
       };
       saveActiveSession(activeSession).catch(err => {
         console.error("Gagal menyimpan session otomatis:", err);
@@ -506,12 +555,10 @@ export default function App() {
     isSuperConcise,
     characterDetails,
     seriesName,
-    model,
-    googleApiKey,
-    kieApiKey
+    provider,
+    model
   ]);
 
-  // Drag and Drop
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -551,7 +598,7 @@ export default function App() {
           const uniqueMap = new Map();
           combined.forEach(img => uniqueMap.set(img.name, img));
           const uniqueList = Array.from(uniqueMap.values());
-          return uniqueList.sort((a, b) => 
+          return uniqueList.sort((a, b) =>
             a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
           );
         });
@@ -602,34 +649,45 @@ export default function App() {
     return paragraphs.slice(-3);
   };
 
+  const getActiveProviderKey = (targetProvider: ProviderType = provider): string => {
+    if (targetProvider === "kie") return kieApiKey.trim();
+    if (targetProvider === "openrouter") return openrouterApiKey.trim();
+    return googleApiKey.trim();
+  };
+
+  const getProviderDisplayName = (targetProvider: ProviderType): string => {
+    if (targetProvider === "kie") return "Kie.ai";
+    if (targetProvider === "openrouter") return "OpenRouter";
+    return "Google AI Studio";
+  };
+
+  const handleSelectProvider = (nextProvider: ProviderType) => {
+    setProvider(nextProvider);
+    setModel(getDefaultModelForProvider(nextProvider));
+    setIsCustomModel(false);
+    setError(null);
+  };
+
   const generateRecap = async (isResume: boolean = false) => {
     if (images.length === 0) {
       setError("Silakan upload minimal satu gambar manga terlebih dahulu.");
       return;
     }
 
-    const effectiveGoogleKey = googleApiKey.trim();
-    const effectiveKieKey = kieApiKey.trim();
-    const isKieModel = model.startsWith("gemini-3") && (model.includes("-5-") || model.includes("-6-") || model.includes("-7-") || model.includes("-8-"));
-
-    if (isKieModel && !effectiveKieKey) {
-      setError("Model Kie.ai dipilih, namun Kie.ai API Key belum diisi. Silakan masukkan API Key Kie.ai Anda di menu Pengaturan Engine.");
-      setIsSettingsExpanded(true);
+    const activeKey = getActiveProviderKey(provider);
+    if (!activeKey) {
+      setError(`API Key untuk ${getProviderDisplayName(provider)} belum diisi. Silakan masukkan API Key di menu Pengaturan terlebih dahulu.`);
+      setShowSettingsModal(true);
       return;
     }
 
-    if (!isKieModel && !effectiveGoogleKey) {
-      setError("API Key Google Gemini belum diisi. Silakan masukkan API Key Anda (dapat dibuat gratis di https://aistudio.google.com/app/apikey) pada menu Pengaturan Engine di atas.");
-      setIsSettingsExpanded(true);
-      return;
-    }
+    const effectiveModel = model.trim() || getDefaultModelForProvider(provider);
 
     setIsGenerating(true);
     setError(null);
-    setIsSettingsExpanded(false);
     cancelGenerationRef.current = false;
     setGenerationProgress("Menandai panel gambar...");
-    
+
     let imagesPayload: { name: string; base64: string; mimeType: string; globalIndex?: number }[] = [];
     try {
       imagesPayload = await Promise.all(
@@ -663,7 +721,7 @@ export default function App() {
         }
 
         let accumulatedScript = isResume ? resumeAccumulatedScript : "";
-        let startIndex = isResume ? resumeBatchIndex : 0;
+        const startIndex = isResume ? resumeBatchIndex : 0;
 
         if (!isResume) {
           setCurrentScriptText("");
@@ -687,7 +745,7 @@ export default function App() {
           const chunkImages = chunks[i];
           const startImgIdx = i * currentBatchSize + 1;
           const endImgIdx = Math.min((i + 1) * currentBatchSize, imagesPayload.length);
-          
+
           let success = false;
           let batchScript = "";
           const maxRetries = 3;
@@ -695,11 +753,10 @@ export default function App() {
           for (let attempt = 1; attempt <= maxRetries; attempt++) {
             if (cancelGenerationRef.current) break;
 
-            const progressMsg = `Memproses Batch ${i + 1}/${chunks.length} (#${startImgIdx}-#${endImgIdx})` + 
+            const progressMsg = `Memproses Batch ${i + 1}/${chunks.length} (#${startImgIdx}-#${endImgIdx})` +
               (attempt > 1 ? ` (Ulang ${attempt - 1}/${maxRetries - 1}...)` : "");
-            
+
             setGenerationProgress(progressMsg);
-            setCurrentRetryCount(attempt - 1);
 
             try {
               const previousParagraphs = getLastThreeParagraphs(accumulatedScript);
@@ -711,9 +768,11 @@ export default function App() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   images: chunkImages,
-                  model,
+                  provider,
+                  model: effectiveModel,
                   googleApiKey,
                   kieApiKey,
+                  openrouterApiKey,
                   tone,
                   language,
                   customInstructions,
@@ -736,10 +795,12 @@ export default function App() {
                     const textErr = await response.text();
                     errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
                   }
-                } catch (e) {
+                } catch (_) {
                   errMsg = `Server Error (${response.status})`;
                 }
-                throw new Error(errMsg);
+                const err: any = new Error(errMsg);
+                err.nonRetryable = [400, 401, 402, 403, 404, 422].includes(response.status);
+                throw err;
               }
 
               const data = await response.json();
@@ -747,13 +808,17 @@ export default function App() {
               success = true;
               break;
             } catch (err: any) {
-              console.warn(`Percobaan ${attempt} gagal untuk Batch ${i + 1}:`, err);
-              if (attempt === maxRetries) {
+              console.log(`Percobaan ${attempt} gagal untuk Batch ${i + 1}:`, err?.message || err);
+              if (err?.nonRetryable || attempt === maxRetries) {
                 setResumeBatchIndex(i);
                 setFailedBatchIndex(i);
                 setResumeAccumulatedScript(accumulatedScript);
                 finishedAll = false;
-                throw new Error(`Gagal memproses Batch ${i + 1} setelah 3 percobaan otomatis.\nDetail: ${err.message || err}`);
+                throw new Error(
+                  err?.nonRetryable
+                    ? `Batch ${i + 1} dihentikan: ${err.message || err}`
+                    : `Gagal memproses Batch ${i + 1} setelah 3 percobaan otomatis.\nDetail: ${err.message || err}`
+                );
               }
               await new Promise(resolve => setTimeout(resolve, 2000));
             }
@@ -767,11 +832,7 @@ export default function App() {
           }
 
           if (success) {
-            if (accumulatedScript) {
-              accumulatedScript += "\n\n" + batchScript;
-            } else {
-              accumulatedScript = batchScript;
-            }
+            accumulatedScript = accumulatedScript ? `${accumulatedScript}\n\n${batchScript}` : batchScript;
             setCurrentScriptText(accumulatedScript);
             setResumeAccumulatedScript(accumulatedScript);
             setResumeBatchIndex(i + 1);
@@ -800,7 +861,8 @@ export default function App() {
             title: generatedTitle,
             date: new Date().toISOString(),
             script: accumulatedScript,
-            model,
+            provider,
+            model: effectiveModel,
             tone,
             language,
             targetLength,
@@ -814,7 +876,6 @@ export default function App() {
           await saveRecapScript(newRecap);
           await loadHistory();
         }
-
       } else {
         setFailedBatchIndex(null);
         setResumeBatchIndex(0);
@@ -826,9 +887,11 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             images: imagesPayload,
-            model,
+            provider,
+            model: effectiveModel,
             googleApiKey,
             kieApiKey,
+            openrouterApiKey,
             tone,
             language,
             customInstructions,
@@ -850,7 +913,7 @@ export default function App() {
               const textErr = await response.text();
               errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
             }
-          } catch (e) {
+          } catch (_) {
             errMsg = `Server Error (${response.status})`;
           }
           throw new Error(errMsg);
@@ -858,24 +921,25 @@ export default function App() {
 
         const data = await response.json();
         setCurrentScriptText(data.script);
-        
+
         const firstImgName = images[0]?.name.replace(/\.[^/.]+$/, "") || "Manga";
         const generatedTitle = `Recap ${firstImgName} (${images.length} Hlm)`;
         setCurrentScriptTitle(generatedTitle);
-        
+
         const cleanHistoryImages = images.map((img, idx) => ({
           name: img.name,
           base64: img.base64,
           mimeType: img.mimeType,
           globalIndex: idx + 1
         }));
-        
+
         const newRecap: RecapScript = {
           id: Math.random().toString(36).substring(2, 9),
           title: generatedTitle,
           date: new Date().toISOString(),
           script: data.script,
-          model,
+          provider,
+          model: effectiveModel,
           tone,
           language,
           targetLength,
@@ -902,12 +966,12 @@ export default function App() {
     setIsEditingWorkspace(false);
 
     try {
-      const generatedTitle = currentScriptTitle;
       const updatedRecap: RecapScript = {
         id: Math.random().toString(36).substring(2, 9),
-        title: generatedTitle,
+        title: currentScriptTitle,
         date: new Date().toISOString(),
         script: workspaceEditText,
+        provider,
         model,
         tone,
         language,
@@ -915,7 +979,7 @@ export default function App() {
         customInstructions,
         images: images.map(img => ({ name: img.name, base64: img.base64, mimeType: img.mimeType }))
       };
-      
+
       await saveRecapScript(updatedRecap);
       await loadHistory();
     } catch (err) {
@@ -925,11 +989,11 @@ export default function App() {
 
   const getCleanStoryText = (rawText: string): string => {
     if (!rawText) return "";
-    return rawText
+    return stripCitationMarkers(rawText)
       .split(/\n/)
       .filter(line => {
         const trimmed = line.trim();
-        return !/^(?:\[?\s*(?:GAMBAR|IMAGE|HALAMAN|PAGE)\s+[0-9\s,\\\-\&dan]+\s*\]?:?)$/i.test(trimmed);
+        return !/^(?:\[?\s*(?:GAMBAR|IMAGE|HALAMAN|PAGE)\s+[0-9\s,\\\-\&dansampai\/]+\s*\]?:?)$/i.test(trimmed);
       })
       .join("\n")
       .replace(/\n{3,}/g, "\n\n")
@@ -937,7 +1001,9 @@ export default function App() {
   };
 
   const copyToClipboard = (cleanOnly: boolean) => {
-    const textToCopy = cleanOnly ? getCleanStoryText(currentScriptText) : currentScriptText;
+    const textToCopy = cleanOnly
+      ? getCleanStoryText(currentScriptText)
+      : stripCitationMarkers(currentScriptText);
     navigator.clipboard.writeText(textToCopy);
     if (cleanOnly) {
       setCopiedClean(true);
@@ -989,31 +1055,31 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       const cleanScript = getCleanStoryText(currentScriptText);
       const safeTitle = currentScriptTitle.toLowerCase().replace(/[^a-z0-9]+/g, "_") || "manga_recap_script";
       zip.file(`${safeTitle}.md`, cleanScript);
-      
+
       const paragraphs = parseRecapScript(currentScriptText);
       let imgCounter = 1;
-      
+
       for (const p of paragraphs) {
         const img = images[p.index - 1] || (p.indices && p.indices.length > 0 ? images[p.indices[0] - 1] : null);
         if (img && img.base64) {
           const padNum = String(imgCounter).padStart(zipDigits, "0");
           let finalBase64 = img.base64;
           let ext = getFileExtension(img.mimeType, img.name);
-          
+
           if (zipImgFormat === "jpg" || zipImgFormat === "png") {
             const targetMime = zipImgFormat === "png" ? "png" : "jpeg";
             const converted = await convertImageToFormat(img.base64, img.mimeType, targetMime);
             finalBase64 = converted.base64;
             ext = zipImgFormat === "png" ? "png" : "jpg";
           }
-          
+
           const imgFileName = `${zipPrefix}${zipSeparator}${padNum}.${ext}`;
           const rawBase64 = finalBase64.split(",")[1] || finalBase64;
           zip.file(imgFileName, rawBase64, { base64: true });
           imgCounter++;
         }
       }
-      
+
       const content = await zip.generateAsync({ type: "blob" });
       const element = document.createElement("a");
       element.href = URL.createObjectURL(content);
@@ -1021,7 +1087,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       document.body.appendChild(element);
       element.click();
       document.body.removeChild(element);
-      
+
       setShowZipModal(false);
     } catch (err) {
       console.error("Gagal membuat file ZIP:", err);
@@ -1033,16 +1099,20 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
 
   const loadScriptFromHistory = (item: RecapScript) => {
     setCurrentScriptTitle(item.title);
-    setCurrentScriptText(item.script);
-    const restoredHistoryModel = (item.model === "gemini-1.5-flash" || item.model === "gemini-2.0-flash")
-      ? "gemini-2.5-flash"
-      : (item.model || "gemini-2.5-flash");
+    setCurrentScriptText(stripCitationMarkers(item.script));
+    const restoredProvider: ProviderType = item.provider || inferProviderFromModel(item.model);
+    const restoredHistoryModel = (item.model === "gemini-1.5-flash" || item.model === "gemini-2.0-flash" || !item.model)
+      ? getDefaultModelForProvider(restoredProvider)
+      : item.model;
+    setProvider(restoredProvider);
     setModel(restoredHistoryModel);
+    const presets = getPresetModelsForProvider(restoredProvider);
+    setIsCustomModel(!presets.some((m) => m.value === restoredHistoryModel));
     setTone(item.tone as ToneType);
     setLanguage(item.language as LanguageType);
     setTargetLength(item.targetLength as LengthType);
     setCustomInstructions(item.customInstructions);
-    
+
     if (item.images && item.images.length > 0) {
       const mappedImages = item.images.map((img) => ({
         id: Math.random().toString(36).substring(2, 9),
@@ -1053,7 +1123,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
       }));
       setImages(mappedImages);
     }
-    setIsSettingsExpanded(false);
+    setActiveNav("dashboard");
     setIsHistoryExpanded(false);
   };
 
@@ -1077,1058 +1147,1388 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
     );
   });
 
-  // Mobile Bottom Navigation Tabs configuration
-  const navTabs = [
-    { id: "manga", label: "Manga", icon: FolderOpen },
-    { id: "naskah", label: "Naskah", icon: FileText },
-    { id: "setelan", label: "Setelan", icon: Settings },
-    { id: "riwayat", label: "Riwayat", icon: History }
-  ] as const;
+  if (!hasEnteredStudio) {
+    return (
+      <ApiKeyGate
+        googleApiKey={googleApiKey}
+        kieApiKey={kieApiKey}
+        openrouterApiKey={openrouterApiKey}
+        onEnterStudio={({ googleApiKey: g, kieApiKey: k, openrouterApiKey: o, preferredProvider }) => {
+          setGoogleApiKey(g);
+          setKieApiKey(k);
+          setOpenrouterApiKey(o);
+          if (preferredProvider) {
+            setProvider(preferredProvider);
+            setModel(getDefaultModelForProvider(preferredProvider));
+            setIsCustomModel(false);
+          }
+          setHasEnteredStudio(true);
+        }}
+      />
+    );
+  }
+
+  const navItems = [
+    { id: "dashboard" as const, label: "Dashboard", icon: Home },
+    { id: "tools" as const, label: "Tools", icon: Wrench },
+    { id: "assets" as const, label: "Assets", icon: FileImage },
+    { id: "riwayat" as const, label: "Riwayat", icon: History },
+  ];
+
+  const handleNavClick = (id: SidebarTab | "pengaturan") => {
+    setIsMobileSidebarOpen(false);
+    if (id === "pengaturan") {
+      setShowSettingsModal(true);
+      return;
+    }
+    setActiveNav(id);
+  };
+
+  const renderHistoryCards = () => {
+    if (filteredHistory.length === 0) {
+      return (
+        <div className="py-8 flex flex-col items-center justify-center text-center">
+          <History className="w-7 h-7 mb-2 text-slate-300" />
+          <h4 className="text-xs font-bold text-slate-600">Tidak ada naskah ditemukan</h4>
+          <p className="text-xs text-slate-400 mt-0.5 max-w-[240px]">
+            {searchQuery ? "Ubah kata kunci pencarian Anda." : "Naskah yang dibuat otomatis tersimpan di riwayat lokal."}
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+        {filteredHistory.map((item) => {
+          const dateFormatted = new Date(item.date).toLocaleDateString("id-ID", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit"
+          });
+
+          return (
+            <div
+              key={item.id}
+              onClick={() => loadScriptFromHistory(item)}
+              className="p-3.5 bg-[#F8FAFC] hover:bg-blue-50/60 border border-slate-600/75 hover:border-[#0066FF] rounded-xl shadow-sm shadow-slate-900/10 transition cursor-pointer flex items-center justify-between gap-3 group"
+            >
+              <div className="flex flex-col gap-1 flex-1 min-w-0">
+                <h4 className="font-bold text-xs sm:text-sm text-slate-900 group-hover:text-[#0066FF] transition truncate">
+                  {item.title}
+                </h4>
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <span className="flex items-center gap-1 tabular-nums">
+                    <Clock className="w-3 h-3" />
+                    {dateFormatted}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span className="capitalize font-medium text-slate-700">{item.tone}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="uppercase font-medium text-slate-600">{item.language}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => handleDeleteHistory(item.id, e)}
+                  className="p-2 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                  title="Hapus naskah"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+                <span className="text-xs text-[#0066FF] font-semibold flex items-center gap-0.5">
+                  Buka
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
-    <div className="min-h-screen w-full bg-[#030712] flex items-center justify-center p-0 md:p-6 select-none overflow-hidden font-sans">
-      
-      {/* simulated Android smartphone container */}
-      <div className="relative w-full h-screen md:max-w-[430px] md:h-[880px] md:rounded-[54px] md:border-[12px] md:border-slate-900 md:shadow-[0_40px_100px_-20px_rgba(0,0,0,1)] bg-slate-950 flex flex-col overflow-hidden ring-1 ring-slate-800/50">
-        
-        {/* Notch / Dynamic Island on desktop only */}
-        <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-32 h-6 bg-black rounded-full z-40 hidden md:flex items-center justify-center border border-white/5 shadow-2xl">
-          <div className="w-3 h-3 bg-slate-900 rounded-full border border-slate-800/80 mr-2 flex items-center justify-center">
-            <div className="w-1 h-1 bg-indigo-500/50 rounded-full"></div>
-          </div>
-          <div className="w-1.5 h-1.5 bg-indigo-950/40 rounded-full"></div>
-        </div>
-
-        {/* Realistic Android Status Bar - Desktop Mockup Only */}
-        <div className="h-7 px-5 pt-1.5 hidden md:flex items-center justify-between text-[11px] font-semibold text-slate-400 select-none bg-slate-950 z-30 shrink-0">
-          <div className="flex items-center gap-1 font-mono tracking-wider">
-            <span>{currentTime || "12:30"}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Signal className="w-3.5 h-3.5 text-slate-400" />
-            <Wifi className="w-3.5 h-3.5 text-slate-400" />
-            <div className="flex items-center gap-1">
-              {isGenerating ? (
-                <span className="text-[8px] text-emerald-400 font-bold uppercase tracking-wider animate-pulse font-mono">CHARGING</span>
-              ) : (
-                <span className="text-[9px] font-mono leading-none">88%</span>
-              )}
-              <Battery className={`w-4 h-4 ${isGenerating ? "text-emerald-400 animate-pulse" : "text-slate-400"}`} />
-            </div>
-          </div>
-        </div>
-
-        {/* Native Android Header / Appbar */}
-        <header className="h-16 px-5 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-between shrink-0 select-none z-20 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-950/40">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <h1 className="text-sm font-extrabold text-white leading-none tracking-tight">Mangaroot</h1>
-              <p className="text-[10px] text-slate-400 mt-1 font-bold font-mono uppercase tracking-[0.1em]">Creator Studio</p>
-            </div>
+    <div className="min-h-screen w-full bg-[#F4F7FB] text-slate-900 flex font-sans">
+      {/* DESKTOP SIDEBAR */}
+      <aside className="hidden md:flex w-[224px] shrink-0 bg-white border-r-[1.5px] border-slate-700/75 shadow-[4px_0_24px_-6px_rgba(15,23,42,0.16)] flex-col justify-between sticky top-0 h-screen">
+        <div>
+          {/* Solid Blue Brand Header */}
+          <div className="bg-[#0066FF] px-5 py-6 text-white">
+            <h1 className="text-xl font-extrabold tracking-tight leading-none">MangaRoot</h1>
+            <p className="text-xs text-blue-100 mt-1.5 font-medium">Creator Studio</p>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Navigation Items */}
+          <nav className="p-3 space-y-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeNav === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleNavClick(item.id)}
+                  className={`w-full min-h-[42px] px-3.5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-3 transition-colors cursor-pointer whitespace-nowrap ${
+                    isActive
+                      ? "bg-[#0066FF] text-white shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 shrink-0 ${isActive ? "text-white" : "text-slate-500"}`} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+
             <button
-              onClick={() => setShowDatabaseModal(true)}
-              className="px-2.5 py-1.5 text-slate-300 hover:text-rose-400 rounded-xl hover:bg-slate-800 border border-slate-800 bg-slate-900/60 transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
-              title="Penyimpanan & Database IndexedDB"
+              type="button"
+              onClick={() => handleNavClick("pengaturan")}
+              className="w-full min-h-[42px] px-3.5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors cursor-pointer whitespace-nowrap"
             >
-              <Database className="w-3.5 h-3.5 text-rose-500" />
-              <span className="text-[10px] font-mono font-bold text-slate-300">DB</span>
+              <Settings className="w-4 h-4 shrink-0 text-slate-500" />
+              <span>Pengaturan</span>
             </button>
+          </nav>
+        </div>
 
+        {/* Sidebar Footer */}
+        <div className="p-4 border-t border-slate-100 text-center space-y-1">
+          <p className="text-xs font-semibold text-slate-500 tabular-nums">v.1.6</p>
+          <p className="text-[11px] text-slate-400">© MangaRoot</p>
+        </div>
+      </aside>
+
+      {/* MOBILE DRAWER SIDEBAR */}
+      {isMobileSidebarOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsMobileSidebarOpen(false);
+          }}
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs md:hidden flex"
+        >
+          <div className="w-[240px] bg-white h-full shadow-2xl flex flex-col justify-between animate-fadeIn">
+            <div>
+              <div className="bg-[#0066FF] px-5 py-5 text-white flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-extrabold tracking-tight leading-none">MangaRoot</h2>
+                  <p className="text-xs text-blue-100 mt-1">Creator Studio</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileSidebarOpen(false)}
+                  className="p-1.5 rounded-lg hover:bg-white/15 text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <nav className="p-3 space-y-1">
+                {navItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeNav === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleNavClick(item.id)}
+                      className={`w-full min-h-[44px] px-3.5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-3 transition-colors cursor-pointer ${
+                        isActive
+                          ? "bg-[#0066FF] text-white"
+                          : "text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => handleNavClick("pengaturan")}
+                  className="w-full min-h-[44px] px-3.5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-3 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <Settings className="w-4 h-4 shrink-0" />
+                  <span>Pengaturan API Key</span>
+                </button>
+              </nav>
+            </div>
+            <div className="p-4 border-t border-slate-100 text-center text-xs text-slate-400">
+              v.1.6 · © MangaRoot
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MAIN CONTENT SHELL */}
+      <div className="flex-1 min-w-0 flex flex-col min-h-screen">
+        {/* TOP HEADER BAR */}
+        <header className="bg-white md:bg-[#F4F7FB] border-b border-slate-600/70 md:border-b-0 px-4 md:px-6 py-3 flex items-center justify-between gap-3 sticky top-0 z-30">
+          {/* Mobile Left: Hamburger + Brand */}
+          <div className="flex items-center gap-3 md:hidden">
+            <button
+              type="button"
+              onClick={() => setIsMobileSidebarOpen(true)}
+              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl border border-slate-600/75 bg-white text-slate-700 hover:bg-slate-50 shadow-sm shadow-slate-900/10 cursor-pointer"
+              aria-label="Buka menu navigasi"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <span className="text-base font-extrabold text-slate-900 leading-none block">MangaRoot</span>
+              <span className="text-[11px] text-slate-500 font-medium block mt-0.5">Creator Studio</span>
+            </div>
+          </div>
+
+          {/* Desktop Left: Active View Breadcrumb */}
+          <div className="hidden md:flex items-center gap-2 text-sm text-slate-500">
+            <span className="font-semibold text-slate-800 capitalize">{activeNav}</span>
+            <span aria-hidden="true">/</span>
+            <span className="text-slate-500 truncate max-w-[260px]">{seriesName || "Manga Recap Studio"}</span>
+          </div>
+
+          {/* Right Controls: Quick Tone Pill Selector + Setting Button */}
+          <div className="flex items-center gap-2 shrink-0">
             <PWAInstallButton variant="header" />
 
-            {images.length > 0 && (
-              <button
-                onClick={clearAllImages}
-                className="p-2 text-slate-400 hover:text-rose-400 rounded-xl hover:bg-rose-500/10 transition-all active:scale-90 cursor-pointer"
-                title="Hapus semua gambar"
+            <div className="relative">
+              <select
+                value={tone}
+                onChange={(e) => setTone(e.target.value as ToneType)}
+                aria-label="Pilih Tone Cepat"
+                className="min-h-[38px] pl-3.5 pr-8 py-1.5 bg-white border border-slate-600/75 hover:border-slate-800 rounded-full text-xs font-bold text-slate-800 outline-none focus:border-[#0066FF] cursor-pointer appearance-none shadow-sm shadow-slate-900/10"
               >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
-            
-            <div className="px-2.5 py-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg text-[10px] font-bold text-indigo-400 uppercase tracking-[0.15em] font-mono select-none">
-              v1.5
+                <option value="aniki">Aniki</option>
+                <option value="dramatic">Drama</option>
+                <option value="humorous">Humoris</option>
+                <option value="formal">Formal</option>
+                <option value="casual">Casual</option>
+                <option value="epic">Epic</option>
+                <option value="custom">Custom</option>
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowSettingsModal(true)}
+              className="min-h-[38px] px-3 py-1.5 bg-white hover:bg-blue-50 border border-slate-600/75 hover:border-[#0066FF] rounded-full text-xs font-semibold text-slate-700 hover:text-[#0066FF] transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-sm shadow-slate-900/10"
+              title="Pengaturan & Tes API Key"
+            >
+              <Key className="w-3.5 h-3.5 text-[#0066FF]" />
+              <span className="hidden sm:inline">Setting</span>
+            </button>
           </div>
         </header>
 
-        {/* MAIN BODY AREA / ACTIVE CONTENT (SINGLE TAB UNIFIED DASHBOARD) */}
-        <div 
-          className="flex-1 overflow-y-auto px-4 py-4 space-y-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden bg-slate-950"
+        {/* WORKSPACE VIEWS */}
+        <main
+          className="flex-1 px-4 md:px-6 pb-8 pt-2 max-w-[1320px] w-full mx-auto space-y-4"
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          
-          {/* SECTION 1: MANGA UPLOAD & HORIZONTAL PREVIEW */}
-          <div className="bg-slate-900/40 border border-slate-800/60 rounded-[2rem] p-5 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-200 font-mono uppercase tracking-[0.1em] flex items-center gap-2">
-                <FolderOpen className="w-4 h-4 text-indigo-400" />
-                Manga Assets ({images.length})
-              </span>
-              {images.length > 0 && (
-                <button
-                  onClick={clearAllImages}
-                  className="text-[10px] text-slate-400 hover:text-rose-400 font-mono font-bold uppercase transition flex items-center gap-1 px-3 py-1.5 bg-slate-950 rounded-xl border border-slate-800/80 cursor-pointer active:scale-95"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Clear
-                </button>
-              )}
-            </div>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            multiple
+            accept="image/*"
+            className="hidden"
+          />
 
-            {images.length === 0 ? (
-              /* Drag Zone */
-              <div 
-                onClick={triggerFileInput}
-                className={`w-full py-14 px-6 border-2 border-dashed rounded-3xl cursor-pointer flex flex-col items-center justify-center transition-all duration-300 active:scale-[0.97] ${
-                  isDragging 
-                    ? "border-indigo-500 bg-indigo-500/10 text-indigo-300" 
-                    : "border-slate-800/80 bg-slate-900/20 text-slate-400 hover:border-indigo-500/50 hover:bg-indigo-500/5"
-                }`}
-              >
-                <div className="p-4 bg-slate-950 rounded-2xl text-indigo-400 mb-4 border border-slate-800 shadow-xl group-hover:scale-110 transition-transform">
-                  <Upload className="w-7 h-7" />
-                </div>
-                <h3 className="font-extrabold text-white text-sm mb-1.5">Import Manga Pages</h3>
-                <p className="text-[11px] text-slate-500 max-w-[240px] leading-relaxed text-center mb-5 font-medium">
-                  Select or drag images here. Numerical ordering applied automatically.
-                </p>
-                <span className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold rounded-xl shadow-lg shadow-indigo-950/40 transition-colors uppercase tracking-wider">
-                  Browse Files
-                </span>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileChange} 
-                  multiple 
-                  accept="image/*" 
-                  className="hidden" 
-                />
-              </div>
-            ) : (
-              /* Swipeable Horizontal Scroller of manga page previews */
-              <div className="flex items-center gap-3 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden shrink-0 select-none">
-                {images.map((img, index) => (
-                  <div key={img.id} className="relative w-20 h-28 rounded-xl border border-slate-850 bg-slate-950 overflow-hidden shadow-md shrink-0 active:scale-95 transition-transform group">
-                    <img 
-                      src={img.url || img.base64} 
-                      alt={img.name} 
-                      className="w-full h-full object-cover pointer-events-none" 
-                      loading="lazy"
-                    />
-                    
-                    {/* Page Index badge */}
-                    <div className="absolute bottom-1 left-1 bg-slate-950/90 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-slate-850">
-                      #{index + 1}
-                    </div>
-
-                    {/* Circular close button */}
-                    <button
-                      onClick={(e) => removeImage(img.id, e)}
-                      className="absolute top-1 right-1 p-1 bg-slate-950/90 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 rounded-full border border-slate-850 backdrop-blur-xs transition cursor-pointer active:scale-90"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  </div>
-                ))}
-
-                {/* Inline "Tambah" upload square */}
-                <button
-                  onClick={triggerFileInput}
-                  className="w-20 h-28 rounded-xl border-2 border-dashed border-slate-800 bg-slate-900/10 hover:bg-slate-900/20 hover:border-slate-700 flex flex-col items-center justify-center gap-1 cursor-pointer shrink-0 transition active:scale-95"
-                >
-                  <Upload className="w-5 h-5 text-slate-500" />
-                  <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Tambah</span>
-                </button>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileChange} 
-                  multiple 
-                  accept="image/*" 
-                  className="hidden" 
-                />
-              </div>
-            )}
-          </div>
-
-          {/* SECTION 2: COLLAPSIBLE SETTINGS & PARAMS ACCORDION */}
-          <div className="bg-slate-900/25 border border-slate-850/60 rounded-3xl overflow-hidden shadow-sm">
-            {/* Header row */}
-            <div 
-              onClick={() => setIsSettingsExpanded(!isSettingsExpanded)}
-              className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-slate-900/30 select-none transition-colors border-b border-slate-800/40"
-            >
-              <div className="flex items-center gap-2.5">
-                <Settings className="w-4 h-4 text-indigo-400" />
-                <span className="text-xs font-bold text-slate-200 font-mono uppercase tracking-[0.1em]">Engine Config & Params</span>
-              </div>
-              <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform duration-300 ${isSettingsExpanded ? "rotate-180" : ""}`} />
-            </div>
-
-            {/* Accordion panel content */}
-            {isSettingsExpanded && (
-              <div className="p-5 space-y-5 animate-fadeIn border-t border-slate-800/20 bg-slate-900/10">
-                {/* Judul Seri Manga */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Series Title</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Talentless Nana"
-                    value={seriesName}
-                    onChange={(e) => setSeriesName(e.target.value)}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-sans shadow-inner"
-                  />
-                </div>
-
-                {/* API Keys Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">AI Studio Project Key</label>
-                      <a 
-                        href="https://aistudio.google.com/app/apikey" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 flex items-center gap-1 transition-colors"
-                      >
-                        <HelpCircle className="w-2.5 h-2.5" />
-                        Get Key
-                      </a>
-                    </div>
-                    <input
-                      type="password"
-                      placeholder="AIzaSy... (Tempel Google Gemini API Key Anda)"
-                      value={googleApiKey}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setGoogleApiKey(val);
-                        try {
-                          if (val.trim()) localStorage.setItem("mangaroot_gemini_api_key", val.trim());
-                          else localStorage.removeItem("mangaroot_gemini_api_key");
-                        } catch (_) {}
-                      }}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-mono"
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-bold text-slate-500 font-mono uppercase tracking-wider">Kie.ai Project Key</label>
-                      <a 
-                        href="https://kie.ai/id/api-key" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-[9px] text-indigo-400 font-bold hover:text-indigo-300 flex items-center gap-1 transition-colors"
-                      >
-                        <HelpCircle className="w-2.5 h-2.5" />
-                        Get Key
-                      </a>
-                    </div>
-                    <input
-                      type="password"
-                      placeholder="kie-... (Tempel Kie.ai API Key Anda)"
-                      value={kieApiKey}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setKieApiKey(val);
-                        try {
-                          if (val.trim()) localStorage.setItem("mangaroot_kie_api_key", val.trim());
-                          else localStorage.removeItem("mangaroot_kie_api_key");
-                        } catch (_) {}
-                      }}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all outline-none font-mono"
-                    />
-                  </div>
-                </div>
-
-                {/* Model Selection & Custom Input */}
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Engine Model</label>
-                    {model === "custom" || (model !== "gemini-2.5-flash" && model !== "gemini-3-6-flash" && model !== "gemini-3-7-flash" && model !== "gemini-3-8-flash") ? (
-                      <span className="text-[9px] font-mono font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20">
-                        Custom Manual Model
-                      </span>
-                    ) : model.startsWith("gemini-3-") ? (
-                      <span className="text-[9px] font-mono font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-lg border border-cyan-500/20">
-                        Wajib Kie.ai Key
-                      </span>
-                    ) : (
-                      <span className="text-[9px] font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-lg border border-indigo-500/20">
-                        Google AI Key
-                      </span>
-                    )}
-                  </div>
-                  <select
-                    value={
-                      model === "gemini-2.5-flash" || 
-                      model === "gemini-3-6-flash" || 
-                      model === "gemini-3-7-flash" || 
-                      model === "gemini-3-8-flash"
-                        ? model 
-                        : "custom"
-                    }
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === "custom") {
-                        setModel("gemini-3-8-flash");
-                      } else {
-                        setModel(val);
-                      }
-                    }}
-                    className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl focus:border-indigo-500 transition-all cursor-pointer outline-none font-sans"
-                  >
-                    <optgroup label="Google AI Studio (Gratis & Stabil)">
-                      <option value="gemini-2.5-flash">Google Gemini 2.5 Flash (Rekomendasi Utama)</option>
-                    </optgroup>
-                    <optgroup label="Kie.ai Engine">
-                      <option value="gemini-3-6-flash">Kie.ai 3.6 Flash</option>
-                      <option value="gemini-3-7-flash">Kie.ai 3.7 Flash</option>
-                      <option value="gemini-3-8-flash">Kie.ai 3.8 Flash</option>
-                    </optgroup>
-                    <option value="custom">✍️ Ketik Manual Nama Model...</option>
-                  </select>
-
-                  {/* Custom Model Text Input */}
-                  {(model === "custom" || (model !== "gemini-2.5-flash" && model !== "gemini-3-6-flash" && model !== "gemini-3-7-flash" && model !== "gemini-3-8-flash")) && (
-                    <div className="flex flex-col gap-1 pt-1 animate-fadeIn">
-                      <input
-                        type="text"
-                        placeholder="Contoh: gemini-3-8-flash atau custom-model-id"
-                        value={model === "custom" ? "" : model}
-                        onChange={(e) => setModel(e.target.value.trim() || "gemini-2.5-flash")}
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 text-amber-300 font-mono text-xs rounded-xl focus:border-amber-500 outline-none"
-                      />
-                      <span className="text-[9px] text-slate-400">Masukkan nama model persis sesuai endpoint API tujuan Anda.</span>
-                    </div>
-                  )}
-
-                  {model.startsWith("gemini-3-") && model !== "custom" && (
-                    <p className="text-[10px] text-cyan-400/90 leading-relaxed bg-cyan-500/5 p-2 rounded-xl border border-cyan-500/15">
-                      💡 <strong>Perhatian:</strong> Model Kie.ai memerlukan API Key dari <a href="https://kie.ai/id/api-key" target="_blank" rel="noopener noreferrer" className="underline font-bold text-cyan-300">kie.ai</a>.
-                    </p>
-                  )}
-                </div>
-
-                {/* Profil Detail Karakter & AI Helper */}
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Profil Detail Karakter</label>
-                    <button
-                      onClick={handleCopyPromptHelper}
-                      className="text-[9px] text-rose-400 font-bold hover:text-rose-300 flex items-center gap-1 active:scale-95 transition-transform"
-                    >
-                      {copiedPrompt ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Copy className="w-2.5 h-2.5" />}
-                      <span>Prompt Helper</span>
-                    </button>
-                  </div>
-                  <textarea
-                    placeholder="Contoh:&#10;1. Hiiragi, Nana (Rambut twintail pink, baju pelaut, pura-pura ceria)&#10;2. Onodera, Kyouya (Rambut putih berantakan, detektif)"
-                    value={characterDetails}
-                    onChange={(e) => setCharacterDetails(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-850 text-slate-200 placeholder-slate-500 text-xs rounded-xl transition focus:outline-none focus:border-rose-500 min-h-[80px] max-h-[120px] resize-y font-sans leading-relaxed"
-                  />
-                </div>
-
-                {/* Tone and Language Grid */}
-                <div className="grid grid-cols-2 gap-3.5">
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Tone</label>
-                    <select
-                      value={tone}
-                      onChange={(e) => setTone(e.target.value as ToneType)}
-                      className="w-full px-2.5 py-2.5 bg-slate-950 border border-slate-850 text-slate-200 text-xs rounded-xl focus:border-rose-500 cursor-pointer outline-none font-sans capitalize"
-                    >
-                      <option value="aniki">AniKi.ID (Storyteller) 🎤</option>
-                      <option value="humorous">Humoris (Funny) 😂</option>
-                      <option value="formal">Formal 👔</option>
-                      <option value="dramatic">Drama 🎭</option>
-                      <option value="casual">Casual ☕</option>
-                      <option value="epic">Epic ⚔️</option>
-                      <option value="custom">Custom (Gaya Sendiri) 🛠️</option>
-                    </select>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Bahasa</label>
-                    <select
-                      value={language}
-                      onChange={(e) => setLanguage(e.target.value as LanguageType)}
-                      className="w-full px-2.5 py-2.5 bg-slate-950 border border-slate-850 text-slate-200 text-xs rounded-xl focus:border-rose-500 cursor-pointer outline-none font-sans"
-                    >
-                      <option value="id">Indonesia 🇮🇩</option>
-                      <option value="en">English 🇬🇧</option>
-                    </select>
-                  </div>
-                </div>
-
-                {tone === "custom" && (
-                  <div className="flex flex-col gap-1.5 mt-2 bg-indigo-500/5 p-3 rounded-2xl border border-indigo-500/10 animate-fadeIn">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[10px] font-bold text-indigo-400 font-mono uppercase tracking-wider">Referensi Gaya Naskah</label>
-                      <Sparkles className="w-3 h-3 text-indigo-400 animate-pulse" />
-                    </div>
-                    <textarea
-                      placeholder="Tempelkan contoh naskah di sini. AI akan meniru gaya bahasa, kata sapaan, dan cara penyampaiannya..."
-                      value={customStyleRef}
-                      onChange={(e) => setCustomStyleRef(e.target.value)}
-                      className="w-full px-3 py-2.5 bg-slate-950 border border-slate-850 text-slate-200 placeholder-slate-600 text-xs rounded-xl transition focus:outline-none focus:border-indigo-500 min-h-[120px] max-h-[200px] resize-y font-sans leading-relaxed shadow-inner"
-                    />
-                  </div>
-                )}
-
-                {/* Script Density Toggle */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Kepadatan Naskah</label>
-                  <div className="flex p-1 bg-slate-950 border border-slate-850 rounded-2xl">
-                    <button
-                      onClick={() => setIsSuperConcise(true)}
-                      className={`flex-1 py-2 text-[10px] font-bold rounded-xl transition-all ${
-                        isSuperConcise 
-                          ? "bg-rose-500 text-white shadow-lg shadow-rose-950/40" 
-                          : "text-slate-500 hover:text-slate-300"
-                      }`}
-                    >
-                      Ringkas ⚡
-                    </button>
-                    <button
-                      onClick={() => setIsSuperConcise(false)}
-                      className={`flex-1 py-2 text-[10px] font-bold rounded-xl transition-all ${
-                        !isSuperConcise 
-                          ? "bg-rose-500 text-white shadow-lg shadow-rose-950/40" 
-                          : "text-slate-500 hover:text-slate-300"
-                      }`}
-                    >
-                      Detail 📖
-                    </button>
-                  </div>
-                  <p className="text-[9px] text-slate-500 font-medium px-1">
-                    {isSuperConcise 
-                      ? "Fokus pada inti plot utama. Cocok untuk video cepat." 
-                      : "Cerita lebih mendalam dan emosional. Cocok untuk video panjang."}
-                  </p>
-                </div>
-
-                {/* Story flow setting */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Alur Cerita</label>
-                  <select
-                    value={scriptType}
-                    onChange={(e) => setScriptType(e.target.value as "first" | "continued")}
-                    className="w-full px-3 py-2.5 bg-slate-950 border border-slate-850 text-slate-200 text-xs rounded-xl focus:border-rose-500 transition duration-150 cursor-pointer outline-none font-sans"
-                  >
-                    <option value="first">Mulai Bab Baru (Awal Naskah)</option>
-                    <option value="continued">Naskah Lanjutan (Konteks Bab Sebelumnya)</option>
-                  </select>
-
-                  {scriptType === "continued" && (
-                    <div className="flex flex-col gap-1 mt-1 bg-slate-950/60 p-2.5 rounded-xl border border-slate-850 animate-fadeIn">
-                      <label className="text-[9px] font-bold text-rose-400 font-mono uppercase tracking-wider">Ringkasan Bab Sebelumnya</label>
-                      <textarea
-                        placeholder="Tulis spoiler ringkas dari video part sebelumnya disini agar kelanjutan cerita batch ini menyambung mulus..."
-                        value={initialContextText}
-                        onChange={(e) => setInitialContextText(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-slate-950 border border-slate-850 text-slate-200 placeholder-slate-500 text-xs rounded-lg transition focus:outline-none focus:border-rose-500 min-h-[50px] max-h-[80px] resize-y font-sans leading-relaxed"
+          {/* VIEW 1: DASHBOARD (EXACT REFERENCE MOCKUP LAYOUT) */}
+          {activeNav === "dashboard" && (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                {/* LEFT COLUMN */}
+                <div className="lg:col-span-7 xl:col-span-8 space-y-4">
+                  {/* Hero Banner Card: Import Manga Pages */}
+                  <div className="bg-gradient-to-r from-[#EBF2FF] to-[#F7FAFF] border-[1.5px] border-slate-700/80 rounded-2xl p-4 flex items-center gap-4 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)]">
+                    <div className="w-24 sm:w-32 h-20 rounded-xl overflow-hidden border border-slate-600/80 bg-white shrink-0 shadow-sm shadow-slate-900/15">
+                      <img
+                        src={mangaBannerThumb}
+                        alt="Ilustrasi panel manga"
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
                       />
                     </div>
-                  )}
-                </div>
+                    <div className="min-w-0">
+                      <h2 className="text-base sm:text-xl font-extrabold text-[#0B2240] tracking-tight">
+                        Import Manga Pages
+                      </h2>
+                      <p className="text-xs sm:text-sm text-slate-600 mt-1 leading-relaxed">
+                        Pilih atau seret gambar manga, dan biarkan AI mengolahnya secara otomatis.
+                      </p>
+                    </div>
+                  </div>
 
-                {/* Generation Mode Select (Batch Mode) */}
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Mode Generasi</label>
-                  <select
-                    value={useBatchMode ? "batch" : "single"}
-                    onChange={(e) => setUseBatchMode(e.target.value === "batch")}
-                    className="w-full px-3 py-2.5 bg-slate-950 border border-slate-850 text-slate-200 text-xs rounded-xl focus:border-rose-500 transition duration-150 cursor-pointer outline-none font-sans"
-                  >
-                    <option value="single">Satu Batch Sekaligus (Semua Gambar)</option>
-                    <option value="batch">Bertahap Per Batch (Rekomendasi YouTube)</option>
-                  </select>
+                  {/* Drag & Drop Upload Card */}
+                  <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl p-4 sm:p-5 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] space-y-4">
+                    <div
+                      onClick={triggerFileInput}
+                      className={`w-full rounded-xl border-2 border-dashed transition-colors cursor-pointer flex flex-col items-center justify-center text-center ${
+                        images.length === 0 ? "py-10 px-5" : "py-5 px-4"
+                      } ${
+                        isDragging
+                          ? "border-[#0066FF] bg-blue-50/70"
+                          : "border-slate-300 bg-[#FAFCFF] hover:border-[#0066FF]/60 hover:bg-blue-50/30"
+                      }`}
+                    >
+                      <UploadCloud className="w-10 h-10 text-[#0066FF] mb-2.5" strokeWidth={1.75} />
+                      <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                        Seret gambar manga ke sini
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        atau klik untuk memilih file
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-2">
+                        Format: JPG, PNG, WEBP · Tanpa batas payload
+                      </p>
+                      <span className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs sm:text-sm font-semibold rounded-xl shadow-xs transition">
+                        <FolderOpen className="w-4 h-4" />
+                        <span>Pilih File</span>
+                      </span>
+                    </div>
 
-                  {useBatchMode && (
-                    <div className="flex flex-col gap-1 bg-slate-950/60 p-3 rounded-xl border border-slate-850 animate-fadeIn mt-1">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 font-mono uppercase">
-                        <span>Halaman per Batch</span>
-                        <span className="text-rose-400 font-bold font-mono text-sm">{batchSize} Hlm</span>
-                      </div>
-                      
-                      {/* Tactile Adjuster */}
-                      <div className="flex items-center gap-3 my-2">
-                        <button
-                          type="button"
-                          onClick={() => setBatchSize(prev => Math.max(1, prev - 1))}
-                          className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-bold text-lg active:scale-90 transition-transform cursor-pointer"
-                        >
-                          -
-                        </button>
-                        
-                        <div className="flex-1 text-center font-mono font-bold text-xs text-slate-200 py-2 bg-slate-950 border border-slate-800 rounded-xl">
-                          {batchSize} Halaman
+                    {images.length > 0 && (
+                      <div className="space-y-2.5 pt-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-800 tabular-nums">
+                            Panel Terunggah ({images.length} Halaman)
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={triggerFileInput}
+                              className="text-xs font-semibold text-[#0066FF] hover:underline cursor-pointer"
+                            >
+                              + Tambah Halaman
+                            </button>
+                            <button
+                              type="button"
+                              onClick={clearAllImages}
+                              className="text-xs font-semibold text-rose-600 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Hapus Semua</span>
+                            </button>
+                          </div>
                         </div>
 
+                        <div className="flex items-center gap-2.5 overflow-x-auto pb-1">
+                          {images.map((img, index) => (
+                            <div
+                              key={img.id}
+                              onClick={() => setFullscreenImageUrl(img.url || img.base64)}
+                              className="relative w-16 h-24 rounded-xl border border-slate-600/80 bg-slate-100 overflow-hidden shrink-0 cursor-zoom-in group shadow-sm shadow-slate-900/15"
+                            >
+                              <img
+                                src={img.url || img.base64}
+                                alt={img.name}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                              <div className="absolute bottom-1 left-1 bg-slate-900/85 text-white text-[10px] font-mono font-bold px-1.5 py-0.5 rounded">
+                                #{index + 1}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => removeImage(img.id, e)}
+                                className="absolute top-1 right-1 p-1 bg-white/95 hover:bg-rose-500 text-slate-600 hover:text-white rounded-full border border-slate-200 transition cursor-pointer"
+                                aria-label={`Hapus halaman ${index + 1}`}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pengaturan Engine & Parameter Card */}
+                  <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] overflow-hidden">
+                    <div className="px-5 py-3.5 border-b border-slate-600/40 flex items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setIsEngineExpanded(!isEngineExpanded)}
+                        className="flex items-center gap-2 text-left cursor-pointer"
+                      >
+                        <Settings className="w-4 h-4 text-[#0066FF] shrink-0" />
+                        <span className="text-sm font-bold text-slate-900">
+                          Pengaturan Engine & Parameter
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!isEngineExpanded) setIsEngineExpanded(true);
+                          else setShowAdvancedEngine(!showAdvancedEngine);
+                        }}
+                        className="text-xs font-semibold text-[#0066FF] hover:text-[#0052CC] flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>Pengaturan Lanjutan</span>
+                        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdvancedEngine && isEngineExpanded ? "rotate-180" : ""}`} />
+                      </button>
+                    </div>
+
+                    {isEngineExpanded && (
+                      <div className="p-5 space-y-4">
+                        {/* Judul Seri */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-700">Judul Seri</label>
+                          <input
+                            type="text"
+                            placeholder="Contoh: Munou na Nana (Talentless Nana)"
+                            value={seriesName}
+                            onChange={(e) => setSeriesName(e.target.value)}
+                            className="w-full min-h-[42px] px-3.5 py-2 bg-white border border-slate-300 focus:border-[#0066FF] focus:ring-2 focus:ring-blue-500/15 text-slate-900 text-sm rounded-xl outline-none transition"
+                          />
+                        </div>
+
+                        {/* Pilih Engine AI */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-semibold text-slate-700">Pilih Engine AI</label>
+                            <button
+                              type="button"
+                              onClick={() => setShowSettingsModal(true)}
+                              className="text-xs font-semibold text-[#0066FF] hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <Key className="w-3 h-3" />
+                              <span>Atur / Tes API Key</span>
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 border border-slate-200 rounded-xl">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectProvider("google")}
+                              className={`min-h-[40px] py-2 px-2 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                                provider === "google"
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-700 hover:bg-white/80"
+                              }`}
+                            >
+                              <span>AI Studio</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectProvider("kie")}
+                              className={`min-h-[40px] py-2 px-2 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                                provider === "kie"
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-700 hover:bg-white/80"
+                              }`}
+                            >
+                              <span>Kie.ai</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectProvider("openrouter")}
+                              className={`min-h-[40px] py-2 px-2 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                                provider === "openrouter"
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-700 hover:bg-white/80"
+                              }`}
+                            >
+                              <span>OpenRouter</span>
+                            </button>
+                          </div>
+
+                          {!getActiveProviderKey(provider) && (
+                            <button
+                              type="button"
+                              onClick={() => setShowSettingsModal(true)}
+                              className="w-full text-left text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl hover:bg-amber-100/70 transition cursor-pointer flex items-center justify-between gap-2"
+                            >
+                              <span>API Key untuk <strong>{getProviderDisplayName(provider)}</strong> belum diisi.</span>
+                              <span className="font-bold underline shrink-0">Buka Setting</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Model Selection */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-700">
+                            Model ({getProviderDisplayName(provider)})
+                          </label>
+                          <div className="relative">
+                            <select
+                              value={isCustomModel ? "custom" : model}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === "custom") {
+                                  setIsCustomModel(true);
+                                } else {
+                                  setIsCustomModel(false);
+                                  setModel(val);
+                                }
+                              }}
+                              className="w-full min-h-[42px] pl-3.5 pr-9 py-2 bg-white border border-slate-300 focus:border-[#0066FF] focus:ring-2 focus:ring-blue-500/15 text-slate-900 text-sm rounded-xl outline-none cursor-pointer appearance-none"
+                            >
+                              {getPresetModelsForProvider(provider).map((item) => (
+                                <option key={item.value} value={item.value}>
+                                  {item.label}
+                                </option>
+                              ))}
+                              <option value="custom">Ketik Manual Nama Model...</option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          </div>
+
+                          {isCustomModel && (
+                            <div className="space-y-1 pt-1">
+                              <input
+                                type="text"
+                                placeholder={
+                                  provider === "openrouter"
+                                    ? "Contoh: google/gemini-4-hydrogen atau anthropic/claude-3.5-sonnet"
+                                    : provider === "kie"
+                                    ? "Contoh: gemini-3-8-flash"
+                                    : "Contoh: gemini-4-hydrogen atau gemini-2.5-flash"
+                                }
+                                value={model}
+                                onChange={(e) => setModel(e.target.value)}
+                                className="w-full min-h-[40px] px-3.5 py-2 bg-[#F8FAFC] border border-slate-300 focus:border-[#0066FF] text-slate-900 font-mono text-xs rounded-xl outline-none"
+                              />
+                              <p className="text-[11px] text-slate-500">
+                                Masukkan ID model persis sesuai endpoint {getProviderDisplayName(provider)}.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Profil Detail Karakter (Advanced toggleable) */}
+                        {showAdvancedEngine && (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-semibold text-slate-700">Profil Detail Karakter</label>
+                              <button
+                                type="button"
+                                onClick={handleCopyPromptHelper}
+                                className="text-xs text-[#0066FF] font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                              >
+                                {copiedPrompt ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                                <span>{copiedPrompt ? "Tersalin!" : "Prompt Helper"}</span>
+                              </button>
+                            </div>
+                            <textarea
+                              placeholder={"Contoh:\n1. Hiiragi, Nana (Rambut twintail pink, baju pelaut, pura-pura ceria)\n2. Onodera, Kyouya (Rambut putih berantakan, detektif)"}
+                              value={characterDetails}
+                              onChange={(e) => setCharacterDetails(e.target.value)}
+                              className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-slate-300 focus:border-[#0066FF] focus:bg-white text-slate-900 placeholder-slate-400 text-xs rounded-xl outline-none min-h-[84px] max-h-[160px] resize-y leading-relaxed transition"
+                            />
+                          </div>
+                        )}
+
+                        {/* Tone & Bahasa Grid */}
+                        <div className="grid grid-cols-2 gap-3.5">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-slate-700">Tone</label>
+                            <div className="relative">
+                              <select
+                                value={tone}
+                                onChange={(e) => setTone(e.target.value as ToneType)}
+                                className="w-full min-h-[42px] pl-3.5 pr-8 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 text-xs sm:text-sm rounded-xl cursor-pointer outline-none appearance-none"
+                              >
+                                <option value="aniki">AniKi.ID (Storyteller)</option>
+                                <option value="humorous">Humoris (Funny)</option>
+                                <option value="formal">Formal</option>
+                                <option value="dramatic">Drama</option>
+                                <option value="casual">Casual</option>
+                                <option value="epic">Epic</option>
+                                <option value="custom">Custom (Gaya Sendiri)</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-slate-700">Bahasa</label>
+                            <div className="relative">
+                              <select
+                                value={language}
+                                onChange={(e) => setLanguage(e.target.value as LanguageType)}
+                                className="w-full min-h-[42px] pl-3.5 pr-8 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 text-xs sm:text-sm rounded-xl cursor-pointer outline-none appearance-none"
+                              >
+                                <option value="id">Indonesia</option>
+                                <option value="en">English</option>
+                              </select>
+                              <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
+                          </div>
+                        </div>
+
+                        {tone === "custom" && (
+                          <div className="space-y-1.5 pt-1">
+                            <label className="text-xs font-semibold text-[#0066FF]">Referensi Gaya Naskah</label>
+                            <textarea
+                              placeholder="Tempelkan contoh naskah di sini. AI akan meniru gaya bahasa dan penyampaiannya..."
+                              value={customStyleRef}
+                              onChange={(e) => setCustomStyleRef(e.target.value)}
+                              className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-slate-300 focus:border-[#0066FF] text-slate-900 placeholder-slate-400 text-xs rounded-xl outline-none min-h-[100px] resize-y"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: DETAIL NASKAH CARD */}
+                <div className="lg:col-span-5 xl:col-span-4 space-y-4">
+                  <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] overflow-hidden">
+                    {/* Solid Blue Detail Naskah Header */}
+                    <div
+                      onClick={() => setIsDetailExpanded(!isDetailExpanded)}
+                      className="bg-[#0066FF] px-5 py-3.5 text-white flex items-center justify-between cursor-pointer lg:cursor-default"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <FileText className="w-4 h-4 text-white shrink-0" />
+                        <span className="text-sm font-bold">Detail Naskah</span>
+                      </div>
+                      <ChevronDown className={`w-4 h-4 text-white lg:hidden transition-transform ${isDetailExpanded ? "rotate-180" : ""}`} />
+                    </div>
+
+                    {isDetailExpanded && (
+                      <div className="p-5 space-y-4">
+                        {/* Kepadatan Naskah */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-700">Kepadatan Naskah</label>
+                          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 border border-slate-200 rounded-xl">
+                            <button
+                              type="button"
+                              onClick={() => setIsSuperConcise(true)}
+                              className={`min-h-[38px] py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                                isSuperConcise
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-600 hover:text-slate-900"
+                              }`}
+                            >
+                              Ringkas
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsSuperConcise(false)}
+                              className={`min-h-[38px] py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                                !isSuperConcise
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-600 hover:text-slate-900"
+                              }`}
+                            >
+                              Detail
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Alur Cerita */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-700">Alur Cerita</label>
+                          <div className="relative">
+                            <select
+                              value={scriptType}
+                              onChange={(e) => setScriptType(e.target.value as "first" | "continued")}
+                              className="w-full min-h-[42px] pl-3.5 pr-8 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 text-xs sm:text-sm rounded-xl cursor-pointer outline-none appearance-none"
+                            >
+                              <option value="first">Mulai Bab Baru (Awal Naskah)</option>
+                              <option value="continued">Naskah Lanjutan (Konteks Bab Sebelumnya)</option>
+                            </select>
+                            <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          </div>
+
+                          {scriptType === "continued" && (
+                            <div className="pt-1">
+                              <textarea
+                                placeholder="Tulis ringkasan singkat dari part sebelumnya agar cerita menyambung mulus..."
+                                value={initialContextText}
+                                onChange={(e) => setInitialContextText(e.target.value)}
+                                className="w-full px-3 py-2 bg-[#F8FAFC] border border-slate-300 focus:border-[#0066FF] text-slate-900 placeholder-slate-400 text-xs rounded-xl outline-none min-h-[68px] resize-y"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Mode Generasi (Batch Default: 8 panels) */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-semibold text-slate-700">Mode Generasi</label>
+                          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 border border-slate-200 rounded-xl">
+                            <button
+                              type="button"
+                              onClick={() => setUseBatchMode(true)}
+                              className={`min-h-[38px] py-1.5 px-2 text-xs font-semibold rounded-lg transition cursor-pointer whitespace-nowrap ${
+                                useBatchMode
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-600 hover:text-slate-900"
+                              }`}
+                            >
+                              Per Batch ({batchSize} Panel)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setUseBatchMode(false)}
+                              className={`min-h-[38px] py-1.5 px-2 text-xs font-semibold rounded-lg transition cursor-pointer whitespace-nowrap ${
+                                !useBatchMode
+                                  ? "bg-[#0066FF] text-white shadow-xs"
+                                  : "text-slate-600 hover:text-slate-900"
+                              }`}
+                            >
+                              Satu Batch Sekaligus
+                            </button>
+                          </div>
+
+                          {useBatchMode && (
+                            <div className="bg-[#F8FAFC] border border-slate-200 rounded-xl p-3 space-y-2">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="font-semibold text-slate-600">Halaman per Batch</span>
+                                <span className="font-bold text-[#0066FF] tabular-nums">{batchSize} Panel</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setBatchSize(prev => Math.max(1, prev - 1))}
+                                  className="w-9 h-9 flex items-center justify-center rounded-lg bg-white border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 cursor-pointer"
+                                >
+                                  -
+                                </button>
+                                <input
+                                  type="range"
+                                  min="1"
+                                  max="20"
+                                  value={batchSize}
+                                  onChange={(e) => setBatchSize(parseInt(e.target.value) || 8)}
+                                  className="flex-1 accent-[#0066FF] cursor-pointer h-1.5 rounded bg-slate-200"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setBatchSize(prev => Math.min(20, prev + 1))}
+                                  className="w-9 h-9 flex items-center justify-center rounded-lg bg-white border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 cursor-pointer"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Instruksi Tambahan (Opsional) */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-semibold text-slate-700">Instruksi Tambahan (Opsional)</label>
+                          <textarea
+                            placeholder='Masukkan instruksi khusus, misal: "Jangan ceritakan bagian X", "Fokus pada pertarungan"...'
+                            value={customInstructions}
+                            onChange={(e) => setCustomInstructions(e.target.value)}
+                            className="w-full px-3.5 py-2.5 bg-[#F8FAFC] border border-slate-300 focus:border-[#0066FF] focus:bg-white text-slate-900 placeholder-slate-400 text-xs rounded-xl outline-none min-h-[78px] max-h-[140px] resize-y leading-relaxed transition"
+                          />
+                        </div>
+
+                        {/* Database IndexedDB Lokal Box */}
                         <button
                           type="button"
-                          onClick={() => setBatchSize(prev => Math.min(20, prev + 1))}
-                          className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-bold text-lg active:scale-90 transition-transform cursor-pointer"
+                          onClick={() => setShowDatabaseModal(true)}
+                          className="w-full text-left p-3.5 bg-[#F8FAFC] hover:bg-blue-50/60 border border-slate-600/75 hover:border-[#0066FF] rounded-xl shadow-sm shadow-slate-900/10 flex items-center gap-3 transition cursor-pointer"
                         >
-                          +
+                          <div className="w-9 h-9 rounded-lg bg-blue-100 text-[#0066FF] flex items-center justify-center shrink-0">
+                            <Database className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900">Database IndexedDB Lokal</p>
+                            <p className="text-[11px] text-slate-500 truncate">Kelola Riwayat, Draft & Backup JSON</p>
+                          </div>
                         </button>
+
+                        {/* Primary CTA: Generate Naskah */}
+                        {isGenerating ? (
+                          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center space-y-2.5">
+                            <div className="flex items-center justify-center gap-2 text-xs font-bold text-[#0066FF]">
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Menyusun Naskah...</span>
+                            </div>
+                            <p className="text-xs text-slate-600">{generationProgress}</p>
+                            {useBatchMode && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  cancelGenerationRef.current = true;
+                                  setGenerationProgress("Membatalkan...");
+                                }}
+                                className="px-4 py-2 bg-white hover:bg-rose-50 border border-rose-200 text-rose-600 text-xs font-semibold rounded-lg transition cursor-pointer"
+                              >
+                                Batalkan Proses
+                              </button>
+                            )}
+                          </div>
+                        ) : failedBatchIndex !== null && useBatchMode ? (
+                          <button
+                            type="button"
+                            onClick={() => generateRecap(true)}
+                            className="w-full min-h-[46px] py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-sm transition cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            <Play className="w-4 h-4 fill-white" />
+                            <span>Lanjutkan Batch #{failedBatchIndex + 1}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => generateRecap(false)}
+                            className="w-full min-h-[46px] py-3 px-4 bg-[#0066FF] hover:bg-[#0052CC] text-white rounded-xl font-bold text-sm shadow-sm transition active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            <Play className="w-4 h-4 fill-white" />
+                            <span>
+                              Generate Naskah{images.length > 0 ? ` (${images.length} Hlm)` : ""}
+                            </span>
+                          </button>
+                        )}
                       </div>
-
-                      <input
-                        type="range"
-                        min="1"
-                        max="20"
-                        value={batchSize}
-                        onChange={(e) => setBatchSize(parseInt(e.target.value) || 5)}
-                        className="w-full accent-rose-500 cursor-pointer h-1.5 rounded bg-slate-800"
-                      />
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
+              </div>
 
-                {/* Instruksi Tambahan (Custom Prompt) */}
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider">Instruksi Tambahan (Custom Prompt)</label>
-                  <textarea
-                    placeholder="Masukkan instruksi khusus, misal: 'Jangan ceritakan bagian X', 'Fokus pada pertarungan'..."
-                    value={customInstructions}
-                    onChange={(e) => setCustomInstructions(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-850 text-slate-200 placeholder-slate-500 text-xs rounded-xl focus:outline-none focus:border-rose-500 min-h-[50px] max-h-[100px] resize-y font-sans leading-relaxed"
-                  />
-                </div>
-
-                {/* Database & Storage Management in Settings */}
-                <div className="p-3 bg-slate-950 border border-slate-850 rounded-2xl flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="p-2 bg-rose-500/10 rounded-xl border border-rose-500/20 text-rose-400">
-                      <Database className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <p className="text-xs font-bold text-slate-200">Database IndexedDB Lokal</p>
-                      <p className="text-[10px] text-slate-400 font-mono">Kelola Riwayat, Draft & Backup JSON</p>
+              {/* ERROR DISPLAY */}
+              {error && (
+                <div className="p-4 bg-rose-50 border-[1.5px] border-rose-700/75 rounded-2xl shadow-[0_8px_24px_-6px_rgba(15,23,42,0.18)] text-rose-800 text-xs flex flex-col gap-3 animate-fadeIn">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-bold text-sm block">Terhenti</span>
+                      <p className="mt-1 leading-relaxed text-xs whitespace-pre-line">{error}</p>
                     </div>
                   </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowSettingsModal(true)}
+                      className="min-h-[38px] py-2 px-3.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Key className="w-3.5 h-3.5 text-[#0066FF]" />
+                      <span>Cek / Tes API Key</span>
+                    </button>
+
+                    {provider !== "google" && googleApiKey.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectProvider("google")}
+                        className="min-h-[38px] py-2 px-3.5 bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Pakai AI Studio</span>
+                      </button>
+                    )}
+
+                    {provider !== "openrouter" && openrouterApiKey.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectProvider("openrouter")}
+                        className="min-h-[38px] py-2 px-3.5 bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Bot className="w-3.5 h-3.5" />
+                        <span>Pakai OpenRouter</span>
+                      </button>
+                    )}
+
+                    {provider !== "kie" && kieApiKey.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectProvider("kie")}
+                        className="min-h-[38px] py-2 px-3.5 bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Globe className="w-3.5 h-3.5" />
+                        <span>Pakai Kie.ai</span>
+                      </button>
+                    )}
+
+                    {failedBatchIndex !== null && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => generateRecap(true)}
+                          className="min-h-[38px] py-2 px-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>Lanjutkan (Resume)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => generateRecap(false)}
+                          className="min-h-[38px] py-2 px-3.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-semibold rounded-xl transition cursor-pointer"
+                        >
+                          Ulangi Awal
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* GENERATED SCRIPT WORKSPACE */}
+              {currentScriptText && currentScriptText.trim() !== "" && (
+                <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] overflow-hidden animate-fadeIn">
+                  <div className="px-5 py-3.5 bg-[#F8FAFC] border-b border-slate-600/40 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText className="w-4 h-4 text-[#0066FF] shrink-0" />
+                      <span className="text-sm font-bold text-slate-900 truncate">{currentScriptTitle}</span>
+                    </div>
+
+                    {!isEditingWorkspace && (
+                      <div className="flex items-center bg-slate-200/70 p-0.5 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setScriptViewMode("segmented")}
+                          className={`px-3 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                            scriptViewMode === "segmented"
+                              ? "bg-[#0066FF] text-white shadow-2xs"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Segmented
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setScriptViewMode("full")}
+                          className={`px-3 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                            scriptViewMode === "full"
+                              ? "bg-[#0066FF] text-white shadow-2xs"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          Full Prose
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="px-5 py-2.5 border-b border-slate-200 flex flex-wrap items-center gap-2">
+                    {isEditingWorkspace ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingWorkspace(false)}
+                          className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={saveEditedScript}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-[#0066FF] hover:bg-[#0052CC] text-white rounded-xl text-xs font-semibold cursor-pointer"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Simpan Perubahan</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWorkspaceEditText(currentScriptText);
+                            setIsEditingWorkspace(true);
+                          }}
+                          disabled={isGenerating}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-40"
+                        >
+                          <FileEdit className="w-3.5 h-3.5 text-[#0066FF]" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(true)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                        >
+                          {copiedClean ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedClean ? "Tersalin!" : "Copy VO"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(false)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+                        >
+                          <span>{copiedRaw ? "Copied Raw!" : "Copy Raw"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowZipModal(true)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-[#0066FF] hover:bg-[#0052CC] text-white rounded-xl text-xs font-semibold cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Export ZIP</span>
+                        </button>
+
+                        {scriptViewMode === "full" && (
+                          <button
+                            type="button"
+                            onClick={() => setShowLabelsInFullView(!showLabelsInFullView)}
+                            className="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-mono cursor-pointer"
+                          >
+                            {showLabelsInFullView ? "Label: On" : "Label: Off"}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  <div className="p-5 max-h-[500px] overflow-y-auto bg-[#FAFCFF]">
+                    {isEditingWorkspace ? (
+                      <textarea
+                        value={workspaceEditText}
+                        onChange={(e) => setWorkspaceEditText(e.target.value)}
+                        className="w-full min-h-[260px] bg-white border border-slate-300 rounded-xl p-4 text-slate-900 font-mono text-sm leading-relaxed focus:outline-none focus:border-[#0066FF] resize-y"
+                      />
+                    ) : scriptViewMode === "segmented" ? (
+                      <div className="space-y-3">
+                        {parseRecapScript(currentScriptText).map((p) => {
+                          const correspondingImg = images[p.index - 1];
+                          return (
+                            <div
+                              key={p.index}
+                              className="bg-white border border-slate-600/75 rounded-xl p-4 shadow-sm shadow-slate-900/10 flex gap-4 items-start"
+                            >
+                              {correspondingImg ? (
+                                <div
+                                  onClick={() => setFullscreenImageUrl(correspondingImg.url || correspondingImg.base64)}
+                                  className="w-16 h-24 rounded-lg overflow-hidden border border-slate-600/70 bg-slate-100 relative shrink-0 cursor-zoom-in shadow-2xs"
+                                  title="Perbesar gambar"
+                                >
+                                  <img
+                                    src={correspondingImg.url || correspondingImg.base64}
+                                    alt={correspondingImg.name}
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <span className="absolute bottom-0 inset-x-0 text-center py-0.5 bg-slate-900/85 text-[10px] font-mono font-bold text-white">
+                                    #{p.index}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="w-14 h-20 rounded-lg border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center shrink-0">
+                                  <span className="text-[10px] font-mono text-slate-400">#{p.index}</span>
+                                </div>
+                              )}
+
+                              <div className="flex-1 min-w-0 space-y-1.5">
+                                <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                                  <span className="text-xs font-bold text-[#0066FF] font-mono">
+                                    {p.label}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => navigator.clipboard.writeText(p.text)}
+                                    className="text-xs text-slate-500 hover:text-[#0066FF] font-semibold flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin</span>
+                                  </button>
+                                </div>
+                                <p className="text-slate-800 text-sm leading-relaxed whitespace-pre-wrap select-text">
+                                  {p.text}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="bg-white border border-slate-600/75 rounded-xl p-5 shadow-sm shadow-slate-900/10 text-slate-800 leading-relaxed text-sm whitespace-pre-wrap select-text min-h-[160px]">
+                        {showLabelsInFullView ? currentScriptText : getCleanStoryText(currentScriptText)}
+                      </div>
+                    )}
+                  </div>
+
+                  {(() => {
+                    const activeText = isEditingWorkspace ? workspaceEditText : currentScriptText;
+                    const statsParagraphs = parseRecapScript(activeText).length;
+                    const statsWords = activeText ? activeText.trim().split(/\s+/).filter(Boolean).length : 0;
+                    const statsChars = activeText ? activeText.length : 0;
+                    return (
+                      <div className="px-5 py-2.5 bg-[#F8FAFC] border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-mono tabular-nums">
+                        <div className="flex items-center gap-4">
+                          <span>Paragraf: <strong className="text-slate-900">{statsParagraphs}</strong></span>
+                          <span>Kata: <strong className="text-slate-900">{statsWords}</strong></span>
+                          <span>Karakter: <strong className="text-slate-900">{statsChars}</strong></span>
+                        </div>
+                        <span className="text-slate-400">Metrics</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* BOTTOM RIWAYAT NASKAH LOKAL BAR */}
+              <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] overflow-hidden">
+                <div
+                  onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
+                  className="px-5 py-3.5 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <History className="w-4 h-4 text-slate-700" />
+                    <span className="text-sm font-bold text-slate-900 tabular-nums">
+                      Riwayat Naskah Lokal ({historyScripts.length})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowDatabaseModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-[#F8FAFC] hover:bg-blue-50 border border-slate-200 hover:border-[#0066FF]/40 rounded-lg text-xs font-semibold text-slate-700 hover:text-[#0066FF] flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <span>Kelola DB</span>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {isHistoryExpanded && (
+                  <div className="px-5 pb-5 pt-2 border-t border-slate-100 space-y-3">
+                    <div className="relative">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Cari naskah, tone, judul..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full min-h-[40px] pl-10 pr-4 py-2 bg-[#F8FAFC] border border-slate-200 text-xs sm:text-sm rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[#0066FF]"
+                      />
+                    </div>
+                    {renderHistoryCards()}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* VIEW 2: TOOLS */}
+          {activeNav === "tools" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl p-5 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] space-y-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 text-[#0066FF] flex items-center justify-center">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">Character Prompt Helper</h2>
+                    <p className="text-xs text-slate-500">Buat prompt profil karakter akurat untuk AI Vision</p>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-700">Nama Seri Target</label>
+                  <input
+                    type="text"
+                    value={seriesName}
+                    onChange={(e) => setSeriesName(e.target.value)}
+                    placeholder="Contoh: Munou na Nana"
+                    className="w-full min-h-[42px] px-3.5 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 text-sm rounded-xl outline-none"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyPromptHelper}
+                  className="w-full min-h-[44px] py-2.5 px-4 bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
+                >
+                  {copiedPrompt ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedPrompt ? "Prompt Helper Disalin!" : "Salin Prompt Profil Karakter"}</span>
+                </button>
+              </div>
+
+              <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl p-5 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] space-y-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 text-[#0066FF] flex items-center justify-center">
+                    <Download className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">Export Paket ZIP & Backup</h2>
+                    <p className="text-xs text-slate-500">Unduh naskah beserta gambar terurut atau backup database</p>
+                  </div>
+                </div>
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowZipModal(true)}
+                    disabled={!currentScriptText.trim()}
+                    className="w-full min-h-[44px] py-2.5 px-4 bg-[#0066FF] hover:bg-[#0052CC] disabled:bg-slate-100 disabled:text-slate-400 text-white text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>{currentScriptText.trim() ? "Buka Pengaturan Export ZIP" : "Generate naskah dahulu untuk Export ZIP"}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowDatabaseModal(true)}
-                    className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-bold rounded-xl transition cursor-pointer active:scale-95"
+                    className="w-full min-h-[44px] py-2.5 px-4 bg-[#F8FAFC] hover:bg-slate-100 border border-slate-200 text-slate-800 text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
                   >
-                    Buka DB
+                    <Database className="w-4 h-4 text-[#0066FF]" />
+                    <span>Buka Pengelola Database IndexedDB</span>
                   </button>
-                </div>
-
-                {/* PWA Install in Settings */}
-                <PWAInstallButton variant="settings" />
-              </div>
-            )}
-          </div>
-
-          {/* MAIN CORE TRIGGER TRIGGER AND GENERATE PANEL */}
-          <div className="space-y-3 shrink-0">
-            {isGenerating ? (
-              /* PROGRESS LOADER BOX */
-              <div className="p-5 bg-slate-900/35 border border-slate-850/80 rounded-3xl flex flex-col items-center justify-center text-center animate-fadeIn space-y-3">
-                <div className="relative">
-                  <div className="w-12 h-12 rounded-full border-4 border-slate-800 border-t-rose-500 animate-spin"></div>
-                  <div className="absolute inset-0 flex items-center justify-center text-rose-500">
-                    <Sparkles className="w-5 h-5 animate-pulse" />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <h3 className="font-bold text-xs text-slate-100">AI Sedang Menyusun Naskah</h3>
-                  <p className="text-[11px] text-slate-400 max-w-[260px] leading-relaxed">{generationProgress}</p>
-                </div>
-                
-                {useBatchMode && (
-                  <button
-                    onClick={() => {
-                      cancelGenerationRef.current = true;
-                      setGenerationProgress("Membatalkan...");
-                    }}
-                    className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-[10px] font-bold rounded-xl transition cursor-pointer active:scale-95"
-                  >
-                    Batalkan Proses
-                  </button>
-                )}
-              </div>
-            ) : (
-              images.length > 0 && (
-                <div className="animate-fadeIn space-y-2.5">
-                  {!googleApiKey.trim() && !kieApiKey.trim() && (
-                    <div 
-                      onClick={() => setIsSettingsExpanded(true)}
-                      className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between cursor-pointer hover:bg-amber-500/20 transition active:scale-[0.99]"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                        <div>
-                          <p className="text-xs font-bold text-amber-300">API Key Belum Diisi</p>
-                          <p className="text-[10px] text-amber-400/80">Klik untuk memasukkan Google Gemini API Key (Gratis di AI Studio)</p>
-                        </div>
-                      </div>
-                      <span className="text-[9px] font-mono font-bold text-amber-300 bg-amber-500/20 px-2.5 py-1.5 rounded-lg shrink-0">
-                        Isi Kunci
-                      </span>
-                    </div>
-                  )}
-
-                  {failedBatchIndex !== null && useBatchMode ? (
-                    <button
-                      onClick={() => generateRecap(true)}
-                      className="w-full py-4.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white rounded-2xl font-bold text-sm shadow-xl shadow-emerald-950/20 hover:scale-[1.01] active:scale-[0.98] cursor-pointer transition flex items-center justify-center gap-2"
-                    >
-                      <Play className="w-5 h-5 text-white" />
-                      <span>Lanjutkan Pembuatan Batch #{failedBatchIndex + 1}</span>
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => generateRecap(false)}
-                      className="w-full py-4.5 bg-gradient-to-tr from-rose-500 to-amber-500 hover:opacity-95 text-white rounded-2xl font-bold text-sm shadow-2xl shadow-rose-950/30 hover:scale-[1.01] active:scale-[0.98] cursor-pointer transition flex items-center justify-center gap-2"
-                    >
-                      <Sparkles className="w-5 h-5 text-white animate-pulse" />
-                      <span>Buat Naskah Video ({images.length} Halaman)</span>
-                    </button>
-                  )}
-                </div>
-              )
-            )}
-
-            {/* ERROR DISPLAY */}
-            {error && (
-              <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-400 text-xs flex flex-col gap-3 animate-fadeIn">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <span className="font-bold">Terhenti:</span>
-                    <p className="mt-1 leading-relaxed text-[11px] whitespace-pre-line">{error}</p>
-                  </div>
-                </div>
-
-                {/* 1-Click Switch Button to Google Gemini if model is Kie.ai or error is Kie-related */}
-                {(model.startsWith("gemini-3-") || error.includes("Kie.ai") || error.includes("kie")) && (
-                  <button
-                    onClick={() => {
-                      setModel("gemini-2.5-flash");
-                      setError(null);
-                    }}
-                    className="w-full py-2.5 px-3 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-950/40 active:scale-98"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                    <span>Ganti ke Google Gemini 2.5 Flash & Coba Lagi</span>
-                  </button>
-                )}
-
-                {failedBatchIndex !== null && (
-                  <div className="flex items-center gap-2 mt-1">
-                    <button
-                      onClick={() => generateRecap(true)}
-                      className="flex-1 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-400 text-[10px] font-bold rounded-lg transition active:scale-95 cursor-pointer flex items-center justify-center gap-1"
-                    >
-                      <Play className="w-3 h-3" />
-                      <span>Lanjutkan (Resume)</span>
-                    </button>
-                    <button
-                      onClick={() => generateRecap(false)}
-                      className="py-2 px-3.5 bg-slate-800 hover:bg-slate-750 text-slate-300 text-[10px] rounded-lg transition font-medium cursor-pointer"
-                    >
-                      Ulangi Awal
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* SECTION 4: SCRIPT WORKSPACE VIEW */}
-          {currentScriptText && currentScriptText.trim() !== "" && (
-            <div className="bg-slate-900/20 border border-slate-850/60 rounded-3xl overflow-hidden shadow-md flex flex-col animate-fadeIn">
-              
-              {/* Header Actions row */}
-              <div className="px-4 py-3 bg-slate-900/50 border-b border-slate-850/40 flex flex-col gap-2 shrink-0">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="text-xs font-bold text-slate-200 truncate">{currentScriptTitle}</span>
-                  </div>
-                  {!isEditingWorkspace && (
-                    <div className="flex items-center bg-slate-950/80 border border-slate-850 p-0.5 rounded-lg">
-                      <button
-                        onClick={() => setScriptViewMode("segmented")}
-                        className={`px-3 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-widest transition-all cursor-pointer ${
-                          scriptViewMode === "segmented"
-                            ? "bg-indigo-600 text-white shadow-lg shadow-indigo-950/40"
-                            : "text-slate-500 hover:text-slate-200"
-                        }`}
-                      >
-                        Segmented
-                      </button>
-                      <button
-                        onClick={() => setScriptViewMode("full")}
-                        className={`px-3 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-widest transition-all cursor-pointer ${
-                          scriptViewMode === "full"
-                            ? "bg-indigo-600 text-white shadow-lg shadow-indigo-950/40"
-                            : "text-slate-500 hover:text-slate-200"
-                        }`}
-                      >
-                        Full Prose
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Touch buttons line */}
-                <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden shrink-0 py-0.5">
-                  {isEditingWorkspace ? (
-                    <>
-                      <button
-                        onClick={() => setIsEditingWorkspace(false)}
-                        className="px-3.5 py-1.5 bg-slate-800 text-slate-300 rounded-lg text-[10px] transition font-bold cursor-pointer"
-                      >
-                        Batal
-                      </button>
-                      <button
-                        onClick={saveEditedScript}
-                        className="flex items-center gap-1 px-3.5 py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-bold transition active:scale-95 cursor-pointer shadow-lg shadow-indigo-950/20"
-                      >
-                        <Save className="w-3 h-3" />
-                        <span>Save Changes</span>
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => {
-                          setWorkspaceEditText(currentScriptText);
-                          setIsEditingWorkspace(true);
-                        }}
-                        disabled={isGenerating}
-                        className={`flex items-center gap-1 px-4 py-2 bg-slate-900 border border-slate-800 text-slate-200 rounded-xl text-[10px] font-bold transition-all ${
-                          isGenerating ? "opacity-30" : "active:scale-95 cursor-pointer hover:bg-slate-800"
-                        }`}
-                      >
-                        <FileEdit className="w-3.5 h-3.5 text-indigo-400" />
-                        <span>Edit</span>
-                      </button>
-
-                      <button
-                        onClick={() => copyToClipboard(true)}
-                        className="flex items-center gap-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[10px] font-bold transition-all active:scale-95 cursor-pointer shadow-lg shadow-emerald-950/20"
-                      >
-                        {copiedClean ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-white" />
-                            <span>Copied!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy VO</span>
-                          </>
-                        )}
-                      </button>
-
-                      <button
-                        onClick={() => copyToClipboard(false)}
-                        className="flex items-center gap-1 px-4 py-2 bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[10px] font-bold transition-all active:scale-95 cursor-pointer"
-                        title="Copy with [GAMBAR] labels"
-                      >
-                        {copiedRaw ? "Copied Raw!" : "Copy Raw"}
-                      </button>
-
-                      <button
-                        onClick={() => setShowZipModal(true)}
-                        className="flex items-center gap-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-[10px] font-bold transition-all active:scale-95 cursor-pointer shadow-lg shadow-indigo-950/30"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Export ZIP</span>
-                      </button>
-
-                      {scriptViewMode === "full" && (
-                        <button
-                          onClick={() => setShowLabelsInFullView(!showLabelsInFullView)}
-                          className="px-2 py-1 bg-slate-850 text-slate-300 rounded-lg text-[9px] font-mono shrink-0 cursor-pointer"
-                        >
-                          {showLabelsInFullView ? "Label: On" : "Label: Off"}
-                        </button>
-                      )}
-                    </>
-                  )}
+                  <PWAInstallButton variant="settings" />
                 </div>
               </div>
-
-              {/* Text / Segment View content container */}
-              <div className="p-4 bg-slate-950/20 max-h-[420px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-b border-slate-850/40">
-                {isEditingWorkspace ? (
-                  <textarea
-                    value={workspaceEditText}
-                    onChange={(e) => setWorkspaceEditText(e.target.value)}
-                    className="w-full min-h-[250px] bg-slate-950 border border-slate-800 rounded-2xl p-4 text-slate-200 font-mono text-sm leading-relaxed focus:outline-none focus:border-indigo-500 resize-y shadow-inner"
-                  />
-                ) : scriptViewMode === "segmented" ? (
-                  <div className="flex flex-col gap-4 select-text">
-                    {parseRecapScript(currentScriptText).map((p) => {
-                      const correspondingImg = images[p.index - 1];
-                      return (
-                        <div key={p.index} className="bg-slate-900/40 border border-slate-800/60 rounded-[1.5rem] p-4 flex gap-4 relative hover:border-indigo-500/30 transition-all group">
-                          <div className="shrink-0 flex flex-col gap-2 items-center">
-                            {correspondingImg ? (
-                              <div 
-                                onClick={() => setFullscreenImageUrl(correspondingImg.url || correspondingImg.base64)}
-                                className="w-16 h-24 rounded-xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-xl cursor-zoom-in active:scale-95 transition-all group-hover:border-indigo-500/50"
-                                title="Expand image"
-                              >
-                                <img 
-                                  src={correspondingImg.url || correspondingImg.base64} 
-                                  alt={correspondingImg.name}
-                                  className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
-                                  referrerPolicy="no-referrer"
-                                />
-                                <div className="absolute inset-0 bg-indigo-950/10 flex items-end">
-                                  <span className="w-full text-center py-1 bg-slate-950/90 text-[8px] font-black font-mono text-indigo-400 uppercase tracking-widest">
-                                    PG #{p.index}
-                                  </span>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="w-14 h-20 rounded-lg border border-dashed border-slate-800 bg-slate-950/40 flex items-center justify-center">
-                                <span className="text-[8px] font-mono text-slate-600">No Img</span>
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex-1 min-w-0 flex flex-col gap-1.5">
-                            <div className="flex items-center justify-between border-b border-slate-800/40 pb-1 shrink-0">
-                              <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider font-mono">
-                                {p.label}
-                              </span>
-                              <button
-                                onClick={() => navigator.clipboard.writeText(p.text)}
-                                className="text-[9px] text-rose-400 font-bold hover:text-rose-300 active:scale-95 cursor-pointer flex items-center gap-0.5"
-                                title="Salin segmen ini saja"
-                              >
-                                <Copy className="w-2.5 h-2.5" />
-                                <span>Salin</span>
-                              </button>
-                            </div>
-                            <p className="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap select-text">
-                              {p.text}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="bg-slate-900/40 border border-slate-850/60 rounded-2xl p-4 text-slate-200 leading-relaxed text-sm select-text whitespace-pre-wrap select-text min-h-[150px]">
-                    {showLabelsInFullView ? currentScriptText : getCleanStoryText(currentScriptText)}
-                  </div>
-                )}
-              </div>
-
-              {/* Metrics row */}
-              {(() => {
-                const activeText = isEditingWorkspace ? workspaceEditText : currentScriptText;
-                const statsParagraphs = parseRecapScript(activeText).length;
-                const statsWords = activeText ? activeText.trim().split(/\s+/).filter(Boolean).length : 0;
-                const statsChars = activeText ? activeText.length : 0;
-                return (
-                  <div className="px-4 py-2 bg-slate-900/60 flex items-center justify-between text-slate-400 text-[10px] shrink-0 font-mono">
-                    <div className="flex items-center gap-3">
-                      <span>Paragraf: <strong className="text-slate-200 font-bold">{statsParagraphs}</strong></span>
-                      <span>Kata: <strong className="text-slate-200 font-bold">{statsWords}</strong></span>
-                      <span>Karakter: <strong className="text-slate-200 font-bold">{statsChars}</strong></span>
-                    </div>
-                    <span className="text-slate-500 uppercase tracking-wider text-[8px] font-bold">Metrics</span>
-                  </div>
-                );
-              })()}
             </div>
           )}
 
-          {/* SECTION 5: COLLAPSIBLE RIWAYAT NASKAH LOKAL */}
-          <div className="bg-slate-900/25 border border-slate-850/60 rounded-3xl overflow-hidden shadow-sm">
-            {/* Header row */}
-            <div 
-              onClick={() => setIsHistoryExpanded(!isHistoryExpanded)}
-              className="px-4 py-3.5 flex items-center justify-between cursor-pointer hover:bg-slate-900/10 select-none transition-colors border-b border-slate-850/20"
-            >
-              <div className="flex items-center gap-2">
-                <History className="w-4 h-4 text-rose-500" />
-                <span className="text-xs font-bold text-slate-200 font-mono uppercase tracking-wider">Riwayat Naskah Lokal ({historyScripts.length})</span>
+          {/* VIEW 3: ASSETS */}
+          {activeNav === "assets" && (
+            <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl p-5 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 tabular-nums">
+                    Galeri Manga Assets ({images.length})
+                  </h2>
+                  <p className="text-xs text-slate-500">Kelola urutan halaman komik sebelum diproses AI</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={triggerFileInput}
+                    className="px-4 py-2 bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-semibold rounded-xl cursor-pointer flex items-center gap-1.5"
+                  >
+                    <UploadCloud className="w-4 h-4" />
+                    <span>Tambah Gambar</span>
+                  </button>
+                  {images.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearAllImages}
+                      className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Hapus Semua</span>
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              {images.length === 0 ? (
+                <div
+                  onClick={triggerFileInput}
+                  className="py-16 border-2 border-dashed border-slate-300 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer hover:border-[#0066FF]/60 hover:bg-blue-50/30 transition"
+                >
+                  <FileImage className="w-10 h-10 text-slate-300 mb-3" />
+                  <p className="text-sm font-bold text-slate-700">Belum ada gambar manga diunggah</p>
+                  <p className="text-xs text-slate-500 mt-1">Klik di sini untuk memilih gambar dari perangkat Anda.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3.5">
+                  {images.map((img, index) => (
+                    <div
+                      key={img.id}
+                      onClick={() => setFullscreenImageUrl(img.url || img.base64)}
+                      className="relative aspect-[3/4] rounded-xl border border-slate-600/80 bg-slate-100 overflow-hidden cursor-zoom-in group shadow-md shadow-slate-900/15"
+                    >
+                      <img
+                        src={img.url || img.base64}
+                        alt={img.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                      <div className="absolute bottom-2 left-2 bg-slate-900/85 text-white text-xs font-mono font-bold px-2 py-0.5 rounded-md">
+                        #{index + 1}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => removeImage(img.id, e)}
+                        className="absolute top-2 right-2 p-1.5 bg-white/95 hover:bg-rose-600 text-slate-700 hover:text-white rounded-full border border-slate-200 transition cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* VIEW 4: RIWAYAT */}
+          {activeNav === "riwayat" && (
+            <div className="bg-white border-[1.5px] border-slate-700/80 rounded-2xl p-5 shadow-[0_8px_24px_-6px_rgba(15,23,42,0.2),0_2px_8px_-2px_rgba(15,23,42,0.1)] space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900 tabular-nums">
+                    Riwayat Naskah Lokal ({historyScripts.length})
+                  </h2>
+                  <p className="text-xs text-slate-500">Klik naskah untuk memuat kembali ke Dashboard</p>
+                </div>
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowDatabaseModal(true);
-                  }}
-                  className="px-2 py-1 bg-slate-950 border border-slate-800 hover:border-rose-500/50 rounded-lg text-[9px] font-mono font-bold text-slate-300 hover:text-rose-400 flex items-center gap-1 transition cursor-pointer"
-                  title="Buka Pengelola Database IndexedDB"
+                  onClick={() => setShowDatabaseModal(true)}
+                  className="px-3.5 py-2 bg-[#F8FAFC] hover:bg-blue-50 border border-slate-200 hover:border-[#0066FF]/40 rounded-xl text-xs font-semibold text-slate-700 hover:text-[#0066FF] flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Database className="w-3 h-3 text-rose-500" />
-                  <span>Kelola DB</span>
+                  <Database className="w-4 h-4 text-[#0066FF]" />
+                  <span>Kelola DB IndexedDB</span>
                 </button>
-                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${isHistoryExpanded ? "rotate-180" : ""}`} />
               </div>
+
+              <div className="relative">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Cari judul naskah, tone, atau isi teks..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full min-h-[42px] pl-10 pr-4 py-2 bg-[#F8FAFC] border border-slate-200 text-sm rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-[#0066FF]"
+                />
+              </div>
+
+              {renderHistoryCards()}
             </div>
-
-            {/* History panel content */}
-            {isHistoryExpanded && (
-              <div className="p-4 space-y-3.5 animate-fadeIn bg-slate-900/5">
-                {/* Search Bar */}
-                <div className="relative">
-                  <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
-                  <input
-                    type="text"
-                    placeholder="Cari naskah, tone, judul..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-850 text-xs rounded-xl text-slate-300 placeholder-slate-500 focus:outline-none focus:border-rose-500 transition"
-                  />
-                </div>
-
-                {/* History draft cards */}
-                {filteredHistory.length === 0 ? (
-                  <div className="py-6 flex flex-col items-center justify-center text-center">
-                    <History className="w-6 h-6 mb-2 text-slate-600" />
-                    <h4 className="text-[11px] font-bold text-slate-400">Tidak ada naskah ditemukan</h4>
-                    <p className="text-[10px] text-slate-500 mt-0.5 max-w-[180px] leading-normal">
-                      {searchQuery ? "Ubah kata kunci pencarian." : "Naskah yang di-generate otomatis tersimpan di sini."}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3.5 max-h-[350px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden py-1">
-                    {filteredHistory.map((item) => {
-                      const dateFormatted = new Date(item.date).toLocaleDateString("id-ID", {
-                        day: "numeric",
-                        month: "short",
-                        hour: "2-digit",
-                        minute: "2-digit"
-                      });
-
-                      return (
-                        <div
-                          key={item.id}
-                          onClick={() => loadScriptFromHistory(item)}
-                          className="p-3 bg-slate-950 border border-slate-850 hover:border-slate-800 rounded-2xl transition duration-150 cursor-pointer flex justify-between gap-3 group active:scale-[0.99]"
-                        >
-                          <div className="flex flex-col gap-1 flex-1 min-w-0">
-                            <h4 className="font-bold text-xs text-slate-200 group-hover:text-rose-400 transition truncate">
-                              {item.title}
-                            </h4>
-                            
-                            {/* Metadata labels */}
-                            <div className="flex items-center gap-1.5 flex-wrap text-[9px] text-slate-500 font-mono uppercase">
-                              <span className="flex items-center gap-0.5">
-                                <Clock className="w-3 h-3" />
-                                {dateFormatted}
-                              </span>
-                              <span>&bull;</span>
-                              <span className="text-rose-500/90 font-bold">{item.tone}</span>
-                              <span>&bull;</span>
-                              <span className="text-slate-300 bg-slate-900 border border-slate-800 px-1 py-0.2 rounded font-bold">{item.language}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 shrink-0 select-none">
-                            <button
-                              onClick={(e) => handleDeleteHistory(item.id, e)}
-                              className="p-2.5 text-slate-600 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 transition active:scale-90 cursor-pointer"
-                              title="Hapus naskah"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="text-[10px] text-rose-400 font-bold group-hover:translate-x-0.5 transition duration-150 flex items-center shrink-0">
-                              Buka
-                              <ChevronRight className="w-3 h-3 shrink-0" />
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-        </div>
-
-        {/* Dynamic Database Footer Status bar */}
-        <footer 
-          onClick={() => setShowDatabaseModal(true)}
-          className="h-6 px-5 border-t border-slate-900/60 bg-slate-950 text-[9px] font-mono font-bold tracking-wider text-slate-400 flex items-center justify-between shrink-0 select-none cursor-pointer hover:bg-slate-900/40 transition"
-          title="Klik untuk membuka Pengelola Database IndexedDB"
-        >
-          <span className="flex items-center gap-1.5 text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            INDEXEDDB: ONLINE ({historyScripts.length} NASKAH)
-          </span>
-          <span className="text-slate-400 hover:text-rose-400 flex items-center gap-1">
-            <Database className="w-3 h-3 text-rose-500" />
-            <span>KELOLA DATABASE</span>
-          </span>
-        </footer>
-
+          )}
+        </main>
       </div>
 
-      {/* ANDROID BOTTOM SHEET STYLE ZIP DOWNLOAD MODAL */}
+      {/* ZIP DOWNLOAD MODAL */}
       {showZipModal && (
-        <div 
-          id="zip-download-modal" 
+        <div
+          id="zip-download-modal"
           onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowZipModal(false);
-            }
+            if (e.target === e.currentTarget) setShowZipModal(false);
           }}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/80 backdrop-blur-xs transition duration-350 p-0 md:p-6 select-none"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
         >
-          <div className="bg-slate-900 border-t border-slate-800 md:border md:rounded-3xl w-full max-w-[430px] overflow-hidden shadow-2xl flex flex-col max-h-[85vh] animate-slideUp">
-            {/* Handle Bar on top of the sheet */}
-            <div className="w-12 h-1 bg-slate-800 rounded-full mx-auto my-3 shrink-0"></div>
-
-            {/* Header */}
-            <div className="px-5 pb-4 border-b border-slate-800 flex items-center gap-3 shrink-0">
-              <div className="p-2.5 bg-rose-500/10 text-rose-500 rounded-2xl">
+          <div className="bg-white border-[1.5px] border-slate-700/85 rounded-2xl w-full max-w-md overflow-hidden shadow-[0_18px_40px_-8px_rgba(15,23,42,0.32)] flex flex-col max-h-[88vh] animate-fadeIn">
+            <div className="bg-[#0066FF] px-5 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
                 <Download className="w-5 h-5" />
+                <div>
+                  <h3 className="font-bold text-sm">Download Paket ZIP</h3>
+                  <p className="text-[11px] text-blue-100">Atur format naskah & nama file gambar ekspor</p>
+                </div>
               </div>
-              <div>
-                <h3 className="font-bold text-slate-100 text-sm">Download Paket ZIP</h3>
-                <p className="text-[10px] text-slate-400 font-medium font-sans">Atur format naskah & nama file gambar ekspor</p>
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowZipModal(false)}
+                className="p-1.5 rounded-lg hover:bg-white/15 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* Scrolling Settings Area */}
-            <div className="p-5 overflow-y-auto flex flex-col gap-4 max-h-[50vh] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Prefix Nama Gambar</label>
+            <div className="p-5 overflow-y-auto space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-700">Prefix Nama Gambar</label>
                 <input
                   type="text"
                   value={zipPrefix}
                   onChange={(e) => setZipPrefix(e.target.value.replace(/[^a-zA-Z0-9]/g, ""))}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 hover:border-slate-700/80 focus:border-rose-500 text-slate-100 rounded-xl text-xs font-mono transition outline-none"
+                  className="w-full min-h-[40px] px-3 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 rounded-xl text-xs font-mono outline-none"
                   placeholder="misal: image, gambar"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Pemisah</label>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-700">Pemisah</label>
                   <select
                     value={zipSeparator}
                     onChange={(e) => setZipSeparator(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 hover:border-slate-700/80 focus:border-rose-500 text-slate-100 rounded-xl text-xs font-mono transition outline-none cursor-pointer"
+                    className="w-full min-h-[40px] px-3 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 rounded-xl text-xs font-mono outline-none cursor-pointer"
                   >
                     <option value="_">_ (Garis Bawah)</option>
                     <option value="-">- (Strip)</option>
@@ -2136,12 +2536,12 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                   </select>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Digit Penomoran</label>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-700">Digit Penomoran</label>
                   <select
                     value={zipDigits}
                     onChange={(e) => setZipDigits(Number(e.target.value))}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 hover:border-slate-700/80 focus:border-rose-500 text-slate-100 rounded-xl text-xs font-mono transition outline-none cursor-pointer"
+                    className="w-full min-h-[40px] px-3 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 rounded-xl text-xs font-mono outline-none cursor-pointer"
                   >
                     <option value={3}>001 (3 Digit)</option>
                     <option value={2}>01 (2 Digit)</option>
@@ -2150,12 +2550,12 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                 </div>
               </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">Konversi Format Gambar</label>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-700">Konversi Format Gambar</label>
                 <select
                   value={zipImgFormat}
                   onChange={(e) => setZipImgFormat(e.target.value as any)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 hover:border-slate-700/80 focus:border-rose-500 text-slate-100 rounded-xl text-xs font-mono transition outline-none cursor-pointer"
+                  className="w-full min-h-[40px] px-3 py-2 bg-white border border-slate-300 focus:border-[#0066FF] text-slate-900 rounded-xl text-xs font-mono outline-none cursor-pointer"
                 >
                   <option value="jpg">JPG (.jpg) - Konversi Otomatis</option>
                   <option value="png">PNG (.png) - Konversi Otomatis</option>
@@ -2163,38 +2563,39 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                 </select>
               </div>
 
-              {/* Struct tree preview inside modal */}
-              <div className="bg-slate-950/60 border border-slate-850 p-3.5 rounded-2xl flex flex-col gap-2.5 font-mono text-[10px] text-slate-300">
-                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Preview Isi File ZIP:</span>
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-1.5 text-rose-400 font-bold">
+              <div className="bg-[#F8FAFC] border border-slate-200 p-3.5 rounded-xl space-y-2 font-mono text-xs text-slate-700">
+                <span className="text-[11px] font-bold text-slate-500">Preview Isi File ZIP:</span>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-[#0066FF] font-semibold">
                     <FileText className="w-3.5 h-3.5" />
                     <span>{currentScriptTitle.toLowerCase().replace(/[^a-z0-9]+/g, "_") || "script"}.md</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-slate-300">
-                    <FileImage className="w-3.5 h-3.5 text-emerald-400" />
+                  <div className="flex items-center gap-2 text-slate-600">
+                    <FileImage className="w-3.5 h-3.5 text-emerald-600" />
                     <span>{zipPrefix}{zipSeparator}{String(1).padStart(zipDigits, "0")}.{zipImgFormat === "original" ? "jpg" : zipImgFormat}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-slate-300">
-                    <FileImage className="w-3.5 h-3.5 text-emerald-400" />
+                  <div className="flex items-center gap-2 text-slate-600">
+                    <FileImage className="w-3.5 h-3.5 text-emerald-600" />
                     <span>{zipPrefix}{zipSeparator}{String(2).padStart(zipDigits, "0")}.{zipImgFormat === "original" ? "jpg" : zipImgFormat}</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="px-5 py-5 bg-slate-950/60 border-t border-slate-800 flex gap-3 shrink-0">
+            <div className="px-5 py-4 bg-[#F8FAFC] border-t border-slate-200 flex gap-3">
               <button
+                type="button"
                 onClick={() => setShowZipModal(false)}
-                className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-extrabold uppercase tracking-widest rounded-2xl transition-all cursor-pointer"
+                className="flex-1 min-h-[42px] bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer"
                 disabled={isZipping}
               >
-                Cancel
+                Batal
               </button>
               <button
+                type="button"
                 onClick={downloadZip}
                 disabled={isZipping}
-                className="flex-[1.5] py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-extrabold uppercase tracking-widest rounded-2xl shadow-xl shadow-indigo-950/40 transition-all active:scale-95 flex items-center justify-center gap-2"
+                className="flex-[1.5] min-h-[42px] bg-[#0066FF] hover:bg-[#0052CC] text-white text-xs font-bold rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer"
               >
                 {isZipping ? (
                   <>
@@ -2215,29 +2616,27 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
 
       {/* FULL SCREEN IMAGE PREVIEW MODAL */}
       {fullscreenImageUrl && (
-        <div 
+        <div
           onClick={() => setFullscreenImageUrl(null)}
-          className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer animate-fadeIn"
+          className="fixed inset-0 z-50 bg-slate-950/90 flex flex-col items-center justify-center p-4 cursor-pointer animate-fadeIn"
         >
-          {/* Top header action bar */}
           <div className="absolute top-4 left-0 right-0 px-6 flex items-center justify-between text-white z-50">
-            <span className="text-xs font-mono font-black tracking-[0.2em] text-indigo-400">ASSET INSPECTION</span>
-            <button 
+            <span className="text-xs font-mono font-bold tracking-wider text-blue-300">ASSET PREVIEW</span>
+            <button
+              type="button"
               onClick={() => setFullscreenImageUrl(null)}
-              className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-900/80 border border-slate-800 text-slate-200"
+              className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
-          
-          <img 
-            src={fullscreenImageUrl} 
-            alt="Manga Preview" 
-            className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-slate-800"
+          <img
+            src={fullscreenImageUrl}
+            alt="Manga Preview"
+            className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl border border-white/10"
             referrerPolicy="no-referrer"
           />
-          
-          <span className="absolute bottom-6 text-slate-500 text-[10px] font-mono font-bold uppercase tracking-widest">Tap anywhere to dismiss</span>
+          <span className="absolute bottom-6 text-slate-300 text-xs font-medium">Klik di mana saja untuk menutup</span>
         </div>
       )}
 
@@ -2251,6 +2650,18 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
         onDataChanged={loadHistory}
       />
 
+      {/* API KEY SETTINGS & CONNECTION TEST MODAL */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        initialTab={provider}
+        googleApiKey={googleApiKey}
+        setGoogleApiKey={setGoogleApiKey}
+        kieApiKey={kieApiKey}
+        setKieApiKey={setKieApiKey}
+        openrouterApiKey={openrouterApiKey}
+        setOpenrouterApiKey={setOpenrouterApiKey}
+      />
     </div>
   );
 }

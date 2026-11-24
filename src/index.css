@@ -36,6 +36,12 @@
   animation: fadeIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
 
+body {
+  background-color: #f4f7fb;
+  color: #0f172a;
+  font-family: var(--font-sans);
+}
+
 /* Custom scrollbars for a clean desktop feel */
 ::-webkit-scrollbar {
   width: 6px;
@@ -47,10 +53,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #cbd5e1;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94a3b8;
 }

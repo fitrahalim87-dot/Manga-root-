@@ -21,6 +21,7 @@ export interface RecapScript {
   title: string;
   date: string;
   script: string;
+  provider?: ProviderType;
   model: string;
   tone: string;
   language: string;
@@ -35,6 +36,8 @@ export interface RecapScript {
 export type ToneType = "aniki" | "formal" | "humorous" | "custom" | "dramatic" | "casual" | "excited" | "epic";
 export type LanguageType = "id" | "en";
 export type LengthType = "short" | "medium" | "long";
+
+export type ProviderType = "google" | "kie" | "openrouter";
 
 export interface ActiveSession {
   id: string;
@@ -53,9 +56,11 @@ export interface ActiveSession {
   isSuperConcise?: boolean;
   characterDetails?: string;
   seriesName?: string;
+  provider?: ProviderType;
   model?: string;
   googleApiKey?: string;
   kieApiKey?: string;
+  openrouterApiKey?: string;
 }
 
 export interface CharacterPreset {

@@ -207,24 +207,14 @@ export interface ParsedParagraph {
   text: string;
 }
 
-function stripCitationMarkers(text: string): string {
-  if (!text) return "";
-  return text
-    .replace(/\s*\[\s*(?:cite|citation|ref|source|sumber|referensi)\b[^\]]*\]/gi, "")
-    .replace(/\s*\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]/g, "")
-    .replace(/\s*【[^】]*】/g, "")
-    .replace(/ +([.,!?])/g, "$1");
-}
-
 function parseRecapScript(text: string): ParsedParagraph[] {
   if (!text) return [];
-  const cleanInput = stripCitationMarkers(text);
   const regex = /\[?GAMBAR\s+([0-9\s,\\\-\&dansampai\/]+)\]?:?/gi;
   const paragraphs: ParsedParagraph[] = [];
   const matches: { header: string; rawRange: string; index: number; nextIndex: number }[] = [];
   let match;
   const activeRegex = new RegExp(regex);
-  while ((match = activeRegex.exec(cleanInput)) !== null) {
+  while ((match = activeRegex.exec(text)) !== null) {
     matches.push({
       header: match[0],
       rawRange: match[1],
@@ -234,7 +224,7 @@ function parseRecapScript(text: string): ParsedParagraph[] {
   }
 
   if (matches.length === 0) {
-    return cleanInput.split(/\n\s*\n/).map((p, idx) => ({
+    return text.split(/\n\s*\n/).map((p, idx) => ({
       index: idx + 1,
       indices: [idx + 1],
       label: `Gambar ${idx + 1}`,
@@ -246,8 +236,8 @@ function parseRecapScript(text: string): ParsedParagraph[] {
     const currentMatch = matches[i];
     const nextMatch = matches[i + 1];
     const contentStart = currentMatch.nextIndex;
-    const contentEnd = nextMatch ? nextMatch.index : cleanInput.length;
-    const pText = cleanInput.substring(contentStart, contentEnd).trim();
+    const contentEnd = nextMatch ? nextMatch.index : text.length;
+    const pText = text.substring(contentStart, contentEnd).trim();
 
     if (pText) {
       const indices: number[] = [];
@@ -989,7 +979,7 @@ export default function App() {
 
   const getCleanStoryText = (rawText: string): string => {
     if (!rawText) return "";
-    return stripCitationMarkers(rawText)
+    return rawText
       .split(/\n/)
       .filter(line => {
         const trimmed = line.trim();
@@ -1001,9 +991,7 @@ export default function App() {
   };
 
   const copyToClipboard = (cleanOnly: boolean) => {
-    const textToCopy = cleanOnly
-      ? getCleanStoryText(currentScriptText)
-      : stripCitationMarkers(currentScriptText);
+    const textToCopy = cleanOnly ? getCleanStoryText(currentScriptText) : currentScriptText;
     navigator.clipboard.writeText(textToCopy);
     if (cleanOnly) {
       setCopiedClean(true);
@@ -1099,7 +1087,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
 
   const loadScriptFromHistory = (item: RecapScript) => {
     setCurrentScriptTitle(item.title);
-    setCurrentScriptText(stripCitationMarkers(item.script));
+    setCurrentScriptText(item.script);
     const restoredProvider: ProviderType = item.provider || inferProviderFromModel(item.model);
     const restoredHistoryModel = (item.model === "gemini-1.5-flash" || item.model === "gemini-2.0-flash" || !item.model)
       ? getDefaultModelForProvider(restoredProvider)

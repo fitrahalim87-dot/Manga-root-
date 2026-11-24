@@ -543,7 +543,6 @@ SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
    - DILARANG menulis kata/frasa penutup, kesimpulan, atau kalimat yang mengakhiri cerita (seperti "Kisah ini ditutup...").
    - DILARANG menggunakan tanda baca khusus seperti (*), ("), (_), (~), atau backtick. Cukup huruf, angka, titik, dan koma.
    - DILARANG menyapa penonton ("halo guys", "simak terus").
-   - DILARANG KERAS menulis tanda sitasi, sumber, atau catatan kaki seperti [cite 1], [cite 1, 2], [citation 1], atau [1] di dalam maupun di akhir kalimat.
 
 CONTOH GAYA NARASI YANG DIHARAPKAN (IKUTI GAYA INI):
 ${effectiveExample}
@@ -1008,14 +1007,8 @@ ${characterDetails}
       };
 
       const normalizeAndCleanScript = (rawText: string): string => {
-        // Strip model-injected inline citation markers such as [cite 1], [cite 1, 2, 9], [1], or 【1†source】 first
-        const withoutCitations = rawText
-          .replace(/\s*\[\s*(?:cite|citation|ref|source|sumber|referensi)\b[^\]]*\]/gi, "")
-          .replace(/\s*\[\s*\d+(?:\s*[-,]\s*\d+)*\s*\]/g, "")
-          .replace(/\s*【[^】]*】/g, "");
-
         // Normalize bracketed tags anywhere and unbracketed tags only at start of lines so narrative prose isn't split
-        let normalized = withoutCitations
+        let normalized = rawText
           .replace(/\*\*\s*(\[\s*(?:GAMBAR|PANEL|HALAMAN|IMAGE)\s+[0-9\s,\-&dansampai\/]+\s*\])\s*\*\*[:]?/gi, "$1")
           .replace(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(?:GAMBAR|PANEL|HALAMAN|IMAGE)\s+([0-9]+(?:\s*(?:-|dan|sampai|s\/d|&|,)\s*[0-9]+)*)\s*(?:\*\*)?\s*[:]?/gi, "\n[GAMBAR $1]\n")
           .replace(/\[\s*(?:GAMBAR|PANEL|HALAMAN|IMAGE)\s+([0-9]+(?:\s*(?:-|dan|sampai|s\/d|&|,)\s*[0-9]+)*)\s*\]\s*[:]?/gi, "\n[GAMBAR $1]\n");
@@ -1030,7 +1023,6 @@ ${characterDetails}
           }
           let cleaned = trimmed
             .replace(/[\*\_\~\`\"\'\“\”\‘\’\:\;\#\%\@]/g, "")
-            .replace(/\s+([.,!?])/g, "$1")
             .replace(/\s+/g, " ")
             .trim();
 
@@ -1161,7 +1153,6 @@ Tuliskan narasi lanjutan HANYA untuk panel-panel yang terlewat di bawah ini seca
 - Setiap tag harus berada di baris sendiri diikuti narasinya pada baris baru (${isSuperConcise ? "1-2 kalimat ringkas per gambar" : "2-4 kalimat detail per gambar"}).
 - JANGAN mengulang panel yang sudah ada di atas.
 - DILARANG menggunakan tanda baca (*), ("), (_), (~), atau backtick.
-- DILARANG menulis tanda sitasi seperti [cite 1], [cite 1, 2], atau [1].
 ${characterDetails ? `Referensi karakter:\n${characterDetails}` : ""}
 `;
 

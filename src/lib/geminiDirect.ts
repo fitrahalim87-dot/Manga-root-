@@ -19,9 +19,11 @@ export interface RecapPayload {
   customInstructions?: string;
   customStyleRef?: string;
   previousParagraphs?: string[];
+  previousStoryContext?: string;
   initialContext?: string;
   isSuperConcise?: boolean;
   characterDetails?: string;
+  seriesName?: string;
 }
 
 export interface TestKeyPayload {
@@ -398,9 +400,11 @@ export async function generateRecapWithProviders(
       customInstructions = "",
       customStyleRef = "",
       previousParagraphs = [],
+      previousStoryContext = "",
       initialContext = "",
       isSuperConcise = true,
-      characterDetails = ""
+      characterDetails = "",
+      seriesName = ""
     } = payload || {};
 
     if (!images || !Array.isArray(images) || images.length === 0) {
@@ -514,38 +518,44 @@ export async function generateRecapWithProviders(
     });
 
     const toneDescriptions: Record<string, string> = {
-      aniki: `Gaya penceritaan "AniKi.ID": Sangat santai, gaul, dan berlagak seperti seorang YouTuber storyteller yang sedang membawakan rangkuman cerita (recap) kepada penonton.
-        - Gunakan kata sapaan "gua", "lu", "kita", "anjir", "gitu".
-        - Gunakan kata "cuy" secara ALAMI dan JARANG (hanya sebagai penekanan di akhir poin penting, jangan di setiap kalimat).
-        - Sering membandingkan karakter dengan penonton (misal: "MC yang jomblo kayak kalian ini").
-        - Alur penceritaan antar tag [GAMBAR X] harus mengalir nyambung seperti satu cerita utuh tanpa terasa terputus-putus, namun setiap gambar tetap wajib memiliki tag [GAMBAR X] masing-masing.
-        - Fokus pada penyampaian yang ekspresif namun tetap efisien.`,
+      aniki: `Gaya penceritaan "AniKi.ID" (Storytelling Voice Over Mengalir):
+        - Bahasa Indonesia santai yang enak didengar telinga, mengalir halus seperti teman yang lagi asyik mendongengkan alur cerita anime/manga secara runtut.
+        - Gunakan penyebutan karakter dengan awalan "si" secara natural (contoh: "si Izumi", "si Amane", "si Hakua") dan pilihan kata kasual yang ringan ("gak", "cuma", "malah", "mendadak", "seketika", "sukses membuat", "bikin").
+        - Gunakan kata sambung transisi cerita yang luwes di awal paragraf agar antar bagian terasa menyatu dalam satu tarikan napas cerita, seperti: "Ya, di awal cerita...", "Nah di sini...", "Dan ya...", "Nah tak lama setelah itu...", "Dan ternyata...", "Namun saat...", "Begitu...", "Suasana kemudian berpindah ke...", "Melihat hal itu...", "Tanpa ragu...".
+        - HINDARI bahasa kasar/lebay yang merusak alur VO (JANGAN pakai "anjir", "cuy", "gua/lu", atau candaan membandingkan penonton seperti "jomblo kayak kalian").
+        - Susun kalimat yang ringkas, jelas sebab-akibatnya, menonjolkan emosi & interaksi karakter, dan langsung masuk ke poin cerita.`,
       formal:
         "Bahasa Indonesia yang baik dan benar, formal, sopan, deskriptif secara elegan, dan menggunakan kosakata yang baku namun tetap menarik untuk narasi dokumenter.",
       humorous:
-        "Sangat lucu, penuh candaan, menyisipkan punchline gokil, sindiran jenaka terhadap kebodohan karakter, dan menggunakan diksi yang memancing tawa.",
+        "Sangat lucu, penuh candaan, menyisipkan punchline jenaka terhadap tingkah konyol karakter, tetap mengalir halus dan enak didengar sebagai VO.",
       dramatic:
-        "Penuh drama, menegangkan, emosional, misterius, dan membuat penonton penasaran di setiap adegannya.",
+        "Penuh drama, menegangkan, emosional, misterius, dan membuat penonton penasaran di setiap kelanjutan adegannya.",
       casual:
-        "Santai, ramah, seperti mengobrol asik dengan teman sebaya, penuh bahasa gaul ringan, langsung ke inti cerita secara kasual.",
+        "Santai, ramah, seperti mengobrol asik dengan teman sebaya, bahasa kasual ringan yang mengalir mulus dari satu kejadian ke kejadian berikutnya.",
       excited:
-        "Sangat bersemangat, berapi-api, penuh energi, histeris di momen-momen gila, menaikkan tensi penonton.",
-      epic: "Sangat epik, luar biasa keren, deskripsi aksi yang megah, puitis, mengagungkan aksi karakter secara tajam.",
-      custom: `Ikuti gaya penulisan secara KETAT berdasarkan "REFERENSI GAYA NASKAH" yang diberikan oleh pengguna. Tiru pilihan kata, struktur kalimat, dan nada bicaranya secara presisi.`
+        "Sangat bersemangat, berapi-api, penuh energi di momen-momen penting, tetap terstruktur dan enak didengar.",
+      epic: "Sangat epik, luar biasa keren, deskripsi aksi yang megah, tajam, dan membangun ketegangan cerita.",
+      custom: `Ikuti gaya penulisan secara KETAT berdasarkan "REFERENSI GAYA NASKAH" yang diberikan oleh pengguna. Tiru pilihan kata, struktur kalimat, transisi, dan nada bicaranya secara presisi.`
     };
 
     const anikiExample = `
 [GAMBAR 1]
-Di awal cerita kita dilihatin MC kita yang bernama Mondo. Dia ini berada di pesta makan-makan dengan teman universitasnya dan di sini kelihatan banget banyak gadis. Si Mondo yang jomblo kayak kalian ini mencoba buat memberanikan diri buat mencari pacar cuy.
+Ya, di awal cerita kita dilihatin teman-teman sekelas Izumi yang ngajak dia ikut karaoke bareng cewek-cewek dari sekolah.
 
 [GAMBAR 2]
-Setelah itu datanglah Tatsumi Aoi yang dia ini cewek paling cantik di universitasnya dan tiba-tiba duduk di dekat Mondo gitu. Ya karena si Mondo ini persis kayak kalian banget dia ini gak bisa nahan pandangannya kalau ada boba besar di depannya cuy.
+Nah di sini si Izumi malah dengan percaya dirinya menyombongkan diri bakal disukai semua cewek yang justru bikin teman-temannya cuma bisa terdiam garing.
 
 [GAMBAR 3]
-Singkat cerita si Mondo ini diminta tolong sama si Aoi dan Aoi ini mengajaknya untuk pergi bersamanya sebentar. Karena terlalu polosnya si Mondo ini mengiyakan saja.
+Dan ya, rasa malu si Izumi makin jadi saat teman-temannya malah menganggap kepribadiannya yang pemalu itu cuma bakal merusak suasana.
 
 [GAMBAR 4]
-Ternyata si Aoi ini mengajak Mondo untuk minum di sebuah bar. Dikarenakan Mondo yang enggak pernah minum ngebuat dia ini mabuk brutal. Si Mondo benar-benar kaget dan panik karena ia enggak membayangkan kalau sifat dari Aoi itu seseram ini cuy.
+Nah tak lama setelah itu, muncul cewek populer bernama Amane Amasaki yang langsung diserbu teman-temannya karena pekerjaan model dan aktivitasnya.
+
+[GAMBAR 5]
+Dan ternyata si Amane ini punya reputasi sempurna di sekolah sebagai model aktif sekaligus murid peringkat satu yang sangat pintar bergaul.
+
+[GAMBAR 6]
+Namun saat seorang teman mengajak si Amane pulang bareng, dia terkejut melihat Amane ternyata sedang asyik belajar berdua saja dengan si Izumi.
       `;
 
     const langInstruction =
@@ -620,12 +630,16 @@ Mulai naskah ini dengan menyambungkan cerita secara mulus dari konteks cerita se
 - JANGAN menggunakan dialog langsung maupun efek suara/tanda kutip ganda ("").
 =========================================\n`;
     } else {
+      const openingGuide =
+        tone === "aniki" && language === "id"
+          ? `AWALI kalimat pertama pada bagian ${expectedHeaders[0]} dengan gaya pembuka alami seperti "Ya, di awal cerita kita dilihatin..." atau "${requiredPrefix} saat..."`
+          : `WAJIB AWALI kalimat pertama pada bagian ${expectedHeaders[0]} dengan tepat menggunakan kata pembuka: "${requiredPrefix}" lalu langsung masuk ke kejadian cerita (misal: "${requiredPrefix} saat sekelompok..." atau "${requiredPrefix} ketika...")`;
       continuityPrompt = `
 =========================================
 PENTING - AWAL NASKAH TANPA KONTEKS SEBELUMNYA:
 Ini adalah awal dari seluruh naskah cerita dan tidak memiliki konteks atau ringkasan cerita dari bagian sebelumnya.
 TUGAS ANDA (MANDATORY):
-- WAJIB AWALI kalimat pertama pada bagian ${expectedHeaders[0]} dengan tepat menggunakan kata pembuka: "${requiredPrefix}" lalu langsung masuk ke kejadian cerita (misal: "${requiredPrefix} saat sekelompok..." atau "${requiredPrefix} ketika..."). JANGAN selipkan frasa seperti "di panel pertama" setelah "${requiredPrefix}".
+- ${openingGuide}. JANGAN selipkan frasa seperti "di panel pertama" setelah pembuka.
 - Tetap patuhi aturan TIDAK menggunakan dialog langsung maupun efek suara/tanda kutip ganda ("").
 =========================================\n`;
     }
@@ -662,6 +676,80 @@ Takemichi mulai panik membayangkan kemarahan Hina, sementara Chifuyu hanya menat
       effectiveExample = `[CONTOH GAYA DARI PENGGUNA]:\n${customStyleRef}\n\n[TUGAS]: Gunakan gaya di atas untuk menulis naskah untuk gambar-gambar berikut.`;
     }
 
+    const cleanSeriesName = typeof seriesName === "string" ? seriesName.trim() : "";
+    const cleanCharacterDetails = typeof characterDetails === "string" ? characterDetails.trim() : "";
+    const cleanPrevStory = typeof previousStoryContext === "string" ? previousStoryContext.trim() : "";
+
+    const extractKnownCharacters = (): string[] => {
+      const found = new Set<string>();
+      const stopWords = new Set([
+        "Ini", "Itu", "Dia", "Mereka", "Kita", "Kami", "Anda", "Yang", "Dan", "Atau", "Tapi", "Namun",
+        "Karena", "Sebab", "Saat", "Ketika", "Begitu", "Setelah", "Sebelum", "Meski", "Walaupun",
+        "Tanpa", "Dengan", "Untuk", "Dari", "Pada", "Dalam", "Di", "Ke", "Si", "Sang", "Para",
+        "Gambar", "Panel", "Halaman", "Bagian", "Cerita", "Bab", "Chapter", "Main", "Character",
+        "Supporting", "Antagonist", "Detail", "Fisik", "Visual", "Rambut", "Mata", "Ekspresi",
+        "Pakaian", "Seragam", "Ciri", "Unik", "Khusus", "Kekuatan", "Bakat", "Sifat", "Karakteristik",
+        "Hubungan", "Kunci", "Peran", "Contoh", "Bos", "Mafia", "Gadis", "Ketua", "Sekolah",
+        "Teman", "Kakak", "Adik", "Ibu", "Ayah", "Guru", "Murid", "Siswa", "Siswi", "Cewek", "Cowok",
+        "Heroine", "Sini", "Sana", "Situ", "Sekarang", "Nanti", "Tadi", "Tiba", "Lalu", "Malah",
+        "Juga", "Pula", "Pun", "Lagi", "Sudah", "Belum", "Akan", "Bisa", "Harus", "Wajib", "Jangan"
+      ]);
+
+      // 1. Names from structured characterDetails headers/bullets
+      if (cleanCharacterDetails) {
+        const headerMatches = cleanCharacterDetails.matchAll(/(?:^|\n)\s*(?:#{1,4}\s*|\d+\.\s*|\-\s*\*\*?)([A-Z][a-zA-Z0-9'’\-]+(?:\s+[A-Z][a-zA-Z0-9'’\-]+){0,2})/g);
+        for (const m of headerMatches) {
+          const candidate = m[1].trim();
+          if (candidate.length >= 2 && !stopWords.has(candidate.split(/\s+/)[0])) {
+            found.add(candidate);
+          }
+        }
+      }
+
+      // 2. Names preceded by "si <Nama>" across previous script and context
+      const combinedHistory = [cleanPrevStory, ...(Array.isArray(previousParagraphs) ? previousParagraphs : []), initialContext || ""]
+        .filter(Boolean)
+        .join("\n");
+      const siMatches = combinedHistory.matchAll(/\bsi\s+([A-Z][a-zA-Z0-9'’\-]+(?:\s+[A-Z][a-zA-Z0-9'’\-]+)?)/g);
+      for (const m of siMatches) {
+        const name = m[1].trim();
+        if (name.length >= 2 && !stopWords.has(name.split(/\s+/)[0])) {
+          found.add(name);
+        }
+      }
+
+      // 3. Repeated capitalized proper names in history (>= 2 mentions)
+      const capCounts = new Map<string, number>();
+      const capMatches = combinedHistory.matchAll(/\b([A-Z][a-z]{2,18})\b/g);
+      for (const m of capMatches) {
+        const w = m[1];
+        if (!stopWords.has(w)) {
+          capCounts.set(w, (capCounts.get(w) || 0) + 1);
+        }
+      }
+      for (const [w, count] of capCounts.entries()) {
+        if (count >= 2) found.add(w);
+      }
+
+      return Array.from(found).slice(0, 25);
+    };
+
+    const lockedCharacterNames = extractKnownCharacters();
+
+    const characterIdentityBlock = `
+=========================================
+KUNCI IDENTITAS & NAMA KARAKTER (PRIORITAS TERTINGGI - ANTI TERTUKAR):
+${cleanSeriesName ? `- JUDUL SERI MANGA: "${cleanSeriesName}". Gunakan pengetahuan kanon seri ini HANYA untuk memastikan ejaan nama resmi dan relasi karakter yang benar-benar cocok secara visual di gambar.` : "- JUDUL SERI: Tidak dicantumkan (identifikasi nama secara ketat dari gambar dan referensi di bawah)."}
+${lockedCharacterNames.length > 0 ? `- DAFTAR NAMA KARAKTER TERKUNCI (WAJIB DIPERTAHANKAN KONSISTEN): ${lockedCharacterNames.join(", ")}` : ""}
+${cleanCharacterDetails ? `- PROFIL VISUAL & DETAIL KARAKTER (COCOKKAN RAMBUT/MATA/SERAGAM/AKSESORI DENGAN GAMBAR):\n---\n${cleanCharacterDetails}\n---` : ""}
+${cleanPrevStory && !isFirstScript ? `- RINGKASAN ALUR SEBELUMNYA (UNTUK MENJAGA KONTEKS TOKOH DARI AWAL BAB):\n---\n${cleanPrevStory}\n---` : ""}
+ATURAN WAJIB PENGENALAN KARAKTER:
+1. BACA SEMUA TEKS & GELEMBUNG DIALOG DI DALAM GAMBAR TERLEBIH DAHULU: Cek setiap panggilan nama, kotak nama, atau narasi di komik untuk mendapatkan ejaan nama yang persis.
+2. COCOKKAN VISUAL SEBELUM MENYEBUT NAMA: Perhatikan gaya rambut, warna/arsiran rambut, bentuk mata, pakaian/seragam, aksesori, dan arah ekor balon bicara sebelum menuliskan siapa yang berbicara atau bertindak. JANGAN PERNAH menukar nama antara dua karakter!
+3. WAJIB SEBUTKAN NAMA RESMI: Jika nama karakter sudah tertera di Profil Karakter, Judul Seri, balon dialog di gambar, atau sudah muncul di bagian sebelumnya, WAJIB sebutkan namanya (jangan dihilangkan menjadi "cewek itu"/"karakter tersebut" saja).
+4. DILARANG KERAS MENGARANG NAMA SENDIRI: Jika seorang tokoh benar-benar baru dan namanya BELUM tertulis di gambar maupun di referensi, JANGAN mengarang nama fiktif sendiri. Gunakan sebutan peran visual yang jelas dan konsisten (misal: "ketua kelas", "gadis berkacamata", "adik kelas berambut pendek") sampai namanya muncul resmi di dialog.
+=========================================\n`;
+
     const brevityInstruction = isSuperConcise
       ? "WAJIB SANGAT RINGKAS: Maksimal 1-2 kalimat pendek per bagian. Fokus hanya pada 'Plot Beat' utama. Jangan deskripsikan visual latar belakang jika tidak ada aksi penting."
       : "MODE DETAIL: Narasikan setiap kejadian di SETIAP bagian secara mendalam, ekspresif, dan emosional (2-4 kalimat per bagian). Ceritakan detail aksi, dialog penting (dalam bentuk narasi tidak langsung), dan perubahan alur cerita secara menyeluruh. DILARANG KERAS melompati atau menggabungkan gambar.";
@@ -671,6 +759,8 @@ Anda adalah seorang Script Writer profesional dan spesialis pembuat naskah recap
 
 TUGAS UTAMA:
 Buat naskah voice over (VO) murni (storytelling alur cerita) yang fokus murni pada PLOT UTAMA. Naskah harus terasa seperti satu cerita utuh yang mengalir terus-menerus, BUKAN penjelasan gambar atau pembahasan panel demi panel.
+
+${characterIdentityBlock}
 
 ${brevityInstruction}
 
@@ -685,10 +775,9 @@ ${formatExample}
 
 SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
 
-1. IDENTIFIKASI KARAKTER (MANDATORY):
-   - Gunakan "REFERENSI DETAIL KARAKTER" di bawah untuk mengidentifikasi siapa saja yang ada di gambar.
-   - JANGAN PERNAH menggunakan deskripsi fisik (misal: "pria berambut kuning") jika karakter tersebut sudah ada di referensi. Gunakan NAMA mereka.
-   - Jika ada karakter baru yang tidak ada di referensi, beri nama deskriptif sementara yang konsisten (misal: "Bos Mafia" atau "Gadis Misterius").
+1. IDENTIFIKASI & KONSISTENSI KARAKTER (MANDATORY):
+   - Prioritaskan pencocokan visual tiap tokoh (rambut, pakaian, ciri khas, arah balon bicara) dengan Profil Karakter & Judul Seri di atas.
+   - Sebutkan NAMA karakter secara konsisten dan tepat tanpa tertukar antar tokoh dan tanpa mengarang nama baru yang tidak ada di gambar/referensi.
 
 2. ATURAN EMAS "NARASI ALUR MURNI" (DILARANG MENYEBUT PANEL/URUTAN):
    - Tag [GAMBAR X] HANYA berfungsi sebagai penanda pemisah di baris terpisah. Di dalam isi paragraf narasinya, DILARANG KERAS menyebut kata "panel", "gambar", "halaman", atau urutan angka!
@@ -696,9 +785,11 @@ SISTEM DAN ALUR GENERASI NASKAH (WAJIB DIPATUHI):
    - Pendengar voice over tidak melihat komik/panelnya, jadi ceritakan LANGSUNG alur kejadian, aksi, reaksi, dan emosi karakter secara menyambung dari paragraf ke paragraf.
    - WAJIB menuliskan setiap tag dari daftar ini satu per satu tanpa ada yang terlewat atau digabung: ${headersListString}.
 
-3. GAYA BAHASA (NARRATIVE FLOW):
-   - Gunakan kata kerja aktif dan transisi cerita alami ("Tiba-tiba...", "Tak lama kemudian...", "Melihat hal itu...", "Akibatnya..."), BUKAN transisi posisi panel.
-   - Fokus pada: Aksi -> Reaksi -> Emosi -> Konsekuensi Plot nyata yang terlihat pada adegan.
+3. GAYA BAHASA & RASA KALIMAT VOICE OVER (NARRATIVE FLOW):
+   - Pastikan setiap paragraf menyambung mulus dengan paragraf sebelumnya seperti satu alur cerita utuh yang dibacakan oleh storyteller, BUKAN kalimat-kalimat terpisah yang kaku.
+   - Gunakan transisi cerita yang natural dan enak diucapkan ("Nah di sini...", "Dan ya...", "Dan ternyata...", "Namun saat...", "Begitu...", "Melihat hal itu...", "Tanpa ragu...", "Suasana kemudian berpindah ke..."), JANGAN memakai kata sambung yang berulang-ulang dan monoton di setiap paragraf.
+   - Jaga susunan kalimat tetap rapi secara tata bahasa (subjek-predikat-objek jelas), tidak terpotong di tengah kalimat, dan enak didengar saat dibaca keras (Voice Over).
+   - Fokus pada: Aksi/Situasi -> Reaksi/Emosi Karakter -> Konsekuensi ke adegan berikutnya.
 
 4. DILARANG KERAS:
    - DILARANG menulis komentar meta tentang recap atau penonton (seperti "penonton pun...", "bahan meme", "recap kali ini").
@@ -714,7 +805,7 @@ Berikut adalah parameter konten tambahan:
 2. Bahasa: ${langInstruction}
 ${customInstructions ? `3. Instruksi Tambahan Khusus dari Pengguna (Prioritas Tinggi): "${customInstructions}"` : ""}
 ${tone === "custom" && customStyleRef ? `4. REFERENSI GAYA NASKAH (WAJIB DIIKUTI):\n---\n${customStyleRef}\n---` : ""}
-${characterDetails ? `5. REFERENSI DETAIL & HUBUNGAN KARAKTER (WAJIB DIIKUTI UNTUK IDENTIFIKASI):\n---\n${characterDetails}\n---` : ""}
+${cleanCharacterDetails ? `5. PENGINGAT PROFIL KARAKTER WAJIB:\n---\n${cleanCharacterDetails}\n---` : ""}
 `;
 
     const buildImageParts = (targetImages: MangaImagePayload[]) => {
@@ -1558,8 +1649,14 @@ ${characterDetails ? `5. REFERENSI DETAIL & HUBUNGAN KARAKTER (WAJIB DIIKUTI UNT
         const cleanOriginal = originalLine.toLowerCase().replace(/[^a-z0-9]/g, "");
         const cleanPrefix = requiredPrefix.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-        if (!cleanOriginal.startsWith(cleanPrefix)) {
-          const commonStarters = /^(di|pada|dalam|saat|ketika|tiba-tiba|tiba|suasana|karakter|dia|mereka|ia|sang|sebuah|seekor|muncul|terlihat|langkah|ekspresi|realitas|momen|sementara|the|when|suddenly|as|at|in|on)\b/i;
+        const alreadyHasNaturalAnikiOpening =
+          tone === "aniki" &&
+          !hasContext &&
+          /^(?:ya,?\s*)?di awal cerita\b/i.test(originalLine);
+
+        if (!cleanOriginal.startsWith(cleanPrefix) && !alreadyHasNaturalAnikiOpening) {
+          const commonStarters =
+            /^(di|pada|dalam|saat|ketika|tiba-tiba|tiba|suasana|karakter|dia|mereka|ia|sang|sebuah|seekor|muncul|terlihat|langkah|ekspresi|realitas|momen|sementara|ya|nah|dan|namun|begitu|setelah|sebelum|meski|walaupun|tanpa|melihat|setibanya|the|when|suddenly|as|at|in|on)\b/i;
           const shouldLowerFirst = commonStarters.test(originalLine);
           const textToAppend = shouldLowerFirst
             ? originalLine.charAt(0).toLowerCase() + originalLine.slice(1)
@@ -1615,9 +1712,12 @@ Tuliskan narasi lanjutan HANYA untuk bagian yang terlewat di bawah ini secara be
         isSuperConcise ? "1-2 kalimat ringkas per bagian" : "2-4 kalimat detail per bagian"
       }).
 - DILARANG KERAS menyebut kata "panel", "gambar", atau urutan angka ("di panel keempat", "masuk ke panel", "sebagai penutup") di dalam isi narasi; langsung lanjutkan alur cerita murni.
+- WAJIB sebutkan nama karakter secara akurat sesuai gambar, naskah di atas, dan referensi di bawah (JANGAN mengarang atau menukar nama).
 - JANGAN mengulang bagian cerita yang sudah ada di atas.
 - DILARANG menggunakan tanda baca (*), ("), (_), (~), atau backtick.
-${characterDetails ? `Referensi karakter:\n${characterDetails}` : ""}
+${cleanSeriesName ? `Judul Seri: ${cleanSeriesName}` : ""}
+${lockedCharacterNames.length > 0 ? `Nama karakter terkunci: ${lockedCharacterNames.join(", ")}` : ""}
+${cleanCharacterDetails ? `Referensi karakter:\n${cleanCharacterDetails}` : ""}
 `;
 
       const repairResult = await invokeProvider([

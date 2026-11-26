@@ -119,7 +119,7 @@ async function watermarkBase64Image(base64: string, label: string): Promise<stri
     img.src = base64;
     img.onload = () => {
       try {
-        const maxDim = 1024;
+        const maxDim = 1440;
         let width = img.width;
         let height = img.height;
         if (width > maxDim || height > maxDim) {
@@ -199,7 +199,7 @@ async function watermarkBase64Image(base64: string, label: string): Promise<stri
         ctx.textBaseline = "middle";
         ctx.fillText(label, dotX + dotRadius + gap, dotY);
 
-        resolve(canvas.toDataURL("image/jpeg", 0.75));
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
       } catch (err) {
         console.error("Error watermarking canvas:", err);
         resolve(base64);
@@ -393,7 +393,7 @@ export default function App() {
   const [customInstructions, setCustomInstructions] = useState<string>("");
   const [customStyleRef, setCustomStyleRef] = useState<string>("");
   const [characterDetails, setCharacterDetails] = useState<string>("");
-  const [seriesName, setSeriesName] = useState<string>("Munou na Nana (Talentless Nana)");
+  const [seriesName, setSeriesName] = useState<string>("");
 
   // Batch Mode Settings (Default: Batch Mode ON, 8 panels per batch)
   const [useBatchMode, setUseBatchMode] = useState<boolean>(true);
@@ -480,7 +480,7 @@ export default function App() {
           setCustomInstructions(session.customInstructions);
           setCustomStyleRef(session.customStyleRef || "");
           setCharacterDetails(session.characterDetails || "");
-          setSeriesName(session.seriesName || "Munou na Nana (Talentless Nana)");
+          setSeriesName(session.seriesName || "");
           setCurrentScriptTitle(session.currentScriptTitle);
           setCurrentScriptText(session.resumeAccumulatedScript);
 
@@ -647,7 +647,17 @@ export default function App() {
       .split(/\n\s*\n/)
       .map(p => p.trim())
       .filter(p => p.length > 0);
-    return paragraphs.slice(-3);
+    return paragraphs.slice(-4);
+  };
+
+  const getPreviousStoryContext = (fullText: string): string => {
+    if (!fullText) return "";
+    const clean = fullText
+      .replace(/\[GAMBAR\s+[^\]]+\]\s*\n?/gi, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (clean.length <= 3500) return clean;
+    return `${clean.slice(0, 1500)}\n...\n${clean.slice(-1800)}`;
   };
 
   const getActiveProviderKey = (targetProvider: ProviderType = provider): string => {
@@ -763,6 +773,7 @@ export default function App() {
 
             try {
               const previousParagraphs = getLastThreeParagraphs(accumulatedScript);
+              const previousStoryContext = getPreviousStoryContext(accumulatedScript);
               const isFirstBatch = i === 0;
               const sendInitialContext = (isFirstBatch && scriptType === "continued") ? initialContextText : "";
 
@@ -781,9 +792,11 @@ export default function App() {
                   customInstructions,
                   customStyleRef,
                   previousParagraphs,
+                  previousStoryContext,
                   initialContext: sendInitialContext,
                   isSuperConcise,
-                  characterDetails
+                  characterDetails,
+                  seriesName
                 })
               });
 
@@ -878,7 +891,8 @@ export default function App() {
             customInstructions,
             images: cleanHistoryImages,
             isSuperConcise,
-            characterDetails
+            characterDetails,
+            seriesName
           };
 
           setGenerationProgress("Menyimpan ke riwayat...");
@@ -907,7 +921,8 @@ export default function App() {
             customStyleRef,
             initialContext: scriptType === "continued" ? initialContextText : "",
             isSuperConcise,
-            characterDetails
+            characterDetails,
+            seriesName
           })
         });
 
@@ -961,7 +976,8 @@ export default function App() {
           customInstructions,
           images: cleanHistoryImages,
           isSuperConcise,
-          characterDetails
+          characterDetails,
+          seriesName
         };
 
         setGenerationProgress("Menyimpan ke riwayat...");
@@ -1125,6 +1141,8 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
     setLanguage(item.language as LanguageType);
     setTargetLength(item.targetLength as LengthType);
     setCustomInstructions(item.customInstructions);
+    if (typeof item.characterDetails === "string") setCharacterDetails(item.characterDetails);
+    if (typeof item.seriesName === "string") setSeriesName(item.seriesName);
 
     if (item.images && item.images.length > 0) {
       const mappedImages = item.images.map((img) => ({

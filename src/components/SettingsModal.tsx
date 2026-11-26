@@ -96,7 +96,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           apiKey: currentActiveKey
         })
       });
-      const data = await response.json();
+      const rawText = await response.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (_) {
+        data = {
+          error: `Server mengembalikan respons tidak valid (${response.status}). Pastikan endpoint /api/test-key aktif.`
+        };
+      }
       if (response.ok && data.ok) {
         setTestResult({
           status: "success",
@@ -105,7 +113,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       } else {
         setTestResult({
           status: "error",
-          message: data.error || "API Key gagal diverifikasi."
+          message: data.error || `API Key gagal diverifikasi (${response.status}).`
         });
       }
     } catch (err: any) {
@@ -302,7 +310,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </a>
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Salin API Key dari portal Kie.ai. Mendukung Gemini 3.6 Flash, 3.7 Flash, 3.8 Flash, atau model custom.
+                Salin API Key dari portal Kie.ai. Mendukung Gemini 4 Hydrogen, Gemini 4 Argon, Gemini 3.8 Flash, atau model custom.
               </p>
             </div>
           )}

@@ -58,14 +58,17 @@ const OPENROUTER_MODELS = [
 ] as const;
 
 const KIE_MODELS = [
-  { value: "gemini-3-8-flash", label: "Kie.ai 3.8 Flash (Default)" },
-  { value: "gemini-3-7-flash", label: "Kie.ai 3.7 Flash" },
-  { value: "gemini-3-6-flash", label: "Kie.ai 3.6 Flash" },
+  { value: "gemini-4-hydrogen", label: "Kie.ai Gemini 4 Hydrogen (Default)" },
+  { value: "gemini-4-argon", label: "Kie.ai Gemini 4 Argon" },
+  { value: "gemini-3-8-flash", label: "Kie.ai Gemini 3.8 Flash" },
+  { value: "gemini-4-hydrogen-openai", label: "Kie.ai Gemini 4 Hydrogen (OpenAI)" },
+  { value: "gemini-3-7-flash", label: "Kie.ai Gemini 3.7 Flash" },
+  { value: "gemini-3-6-flash", label: "Kie.ai Gemini 3.6 Flash" },
 ] as const;
 
 function getDefaultModelForProvider(p: ProviderType): string {
   if (p === "openrouter") return "google/gemini-4-hydrogen";
-  if (p === "kie") return "gemini-3-8-flash";
+  if (p === "kie") return "gemini-4-hydrogen";
   return "gemini-4-hydrogen";
 }
 
@@ -78,7 +81,15 @@ function getPresetModelsForProvider(p: ProviderType) {
 function inferProviderFromModel(modelName: string): ProviderType {
   const m = (modelName || "").trim();
   if (m.includes("/")) return "openrouter";
-  if (m === "gemini-3-6-flash" || m === "gemini-3-7-flash" || m === "gemini-3-8-flash") return "kie";
+  if (
+    m.endsWith("-openai") ||
+    m === "gemini-4-argon" ||
+    m === "gemini-3-6-flash" ||
+    m === "gemini-3-7-flash" ||
+    m === "gemini-3-8-flash"
+  ) {
+    return "kie";
+  }
   return "google";
 }
 
@@ -209,7 +220,7 @@ export interface ParsedParagraph {
 
 function parseRecapScript(text: string): ParsedParagraph[] {
   if (!text) return [];
-  const regex = /\[?GAMBAR\s+([0-9\s,\\\-\&dansampai\/]+)\]?:?/gi;
+  const regex = /\[\s*GAMBAR\s+([0-9\s,\\\-\&dansampai\/]+)\s*\]\s*:?|(?:^|\n)\s*GAMBAR\s+([0-9\s,\\\-\&dansampai\/]+)\s*:?/gi;
   const paragraphs: ParsedParagraph[] = [];
   const matches: { header: string; rawRange: string; index: number; nextIndex: number }[] = [];
   let match;
@@ -217,7 +228,7 @@ function parseRecapScript(text: string): ParsedParagraph[] {
   while ((match = activeRegex.exec(text)) !== null) {
     matches.push({
       header: match[0],
-      rawRange: match[1],
+      rawRange: (match[1] || match[2] || "").trim(),
       index: match.index,
       nextIndex: activeRegex.lastIndex
     });
@@ -369,7 +380,7 @@ export default function App() {
       const k = localStorage.getItem("mangaroot_kie_api_key") || "";
       if (g.trim()) return "gemini-4-hydrogen";
       if (or.trim()) return "google/gemini-4-hydrogen";
-      if (k.trim()) return "gemini-3-8-flash";
+      if (k.trim()) return "gemini-4-hydrogen";
     } catch (_) {}
     return "gemini-4-hydrogen";
   });
@@ -684,10 +695,12 @@ export default function App() {
         images.map(async (img, idx) => {
           const label = `GAMBAR ${idx + 1}`;
           const watermarkedBase64 = await watermarkBase64Image(img.base64, label);
+          const dataUriMimeMatch = watermarkedBase64.match(/^data:([^;]+);base64,/i);
+          const effectiveMime = dataUriMimeMatch?.[1]?.toLowerCase() || img.mimeType || "image/jpeg";
           return {
             name: img.name,
             base64: watermarkedBase64,
-            mimeType: img.mimeType,
+            mimeType: effectiveMime,
             globalIndex: idx + 1
           };
         })
@@ -774,27 +787,33 @@ export default function App() {
                 })
               });
 
+              const rawRespText = await response.text();
+              let parsedResp: any = {};
+              try {
+                parsedResp = rawRespText ? JSON.parse(rawRespText) : {};
+              } catch (_) {
+                parsedResp = {};
+              }
+
               if (!response.ok) {
-                let errMsg = "Gagal melakukan generate naskah.";
-                try {
-                  const contentType = response.headers.get("content-type");
-                  if (contentType && contentType.includes("application/json")) {
-                    const errData = await response.json();
-                    errMsg = errData.error || errMsg;
-                  } else {
-                    const textErr = await response.text();
-                    errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
-                  }
-                } catch (_) {
-                  errMsg = `Server Error (${response.status})`;
+                let errMsg = parsedResp?.error || "Gagal melakukan generate naskah.";
+                if (response.status === 413) {
+                  errMsg = "Ukuran batch gambar terlalu besar untuk batas payload server Vercel (4.5 MB). Kecilkan ukuran batch (misal 4-6 panel per batch).";
+                } else if (!parsedResp?.error) {
+                  errMsg = rawRespText
+                    ? `Server Error (${response.status}): ${rawRespText.substring(0, 150)}`
+                    : `Server Error (${response.status})`;
                 }
                 const err: any = new Error(errMsg);
-                err.nonRetryable = [400, 401, 402, 403, 404, 422].includes(response.status);
+                err.nonRetryable = [400, 401, 402, 403, 404, 413, 422].includes(response.status);
                 throw err;
               }
 
-              const data = await response.json();
-              batchScript = data.script.trim();
+              if (!parsedResp?.script) {
+                throw new Error("Server mengembalikan respons kosong tanpa naskah.");
+              }
+
+              batchScript = String(parsedResp.script).trim();
               success = true;
               break;
             } catch (err: any) {
@@ -892,24 +911,30 @@ export default function App() {
           })
         });
 
+        const rawRespText = await response.text();
+        let data: any = {};
+        try {
+          data = rawRespText ? JSON.parse(rawRespText) : {};
+        } catch (_) {
+          data = {};
+        }
+
         if (!response.ok) {
-          let errMsg = "Gagal melakukan generate naskah.";
-          try {
-            const contentType = response.headers.get("content-type");
-            if (contentType && contentType.includes("application/json")) {
-              const errData = await response.json();
-              errMsg = errData.error || errMsg;
-            } else {
-              const textErr = await response.text();
-              errMsg = `Server Error (${response.status}): ${textErr.substring(0, 150)}`;
-            }
-          } catch (_) {
-            errMsg = `Server Error (${response.status})`;
+          let errMsg = data?.error || "Gagal melakukan generate naskah.";
+          if (response.status === 413) {
+            errMsg = "Ukuran batch gambar terlalu besar untuk batas payload server Vercel (4.5 MB). Aktifkan Mode Batch (4-8 panel per batch).";
+          } else if (!data?.error) {
+            errMsg = rawRespText
+              ? `Server Error (${response.status}): ${rawRespText.substring(0, 150)}`
+              : `Server Error (${response.status})`;
           }
           throw new Error(errMsg);
         }
 
-        const data = await response.json();
+        if (!data?.script) {
+          throw new Error("Server mengembalikan respons kosong tanpa naskah.");
+        }
+
         setCurrentScriptText(data.script);
 
         const firstImgName = images[0]?.name.replace(/\.[^/.]+$/, "") || "Manga";
@@ -1676,7 +1701,7 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                                   provider === "openrouter"
                                     ? "Contoh: google/gemini-4-hydrogen atau anthropic/claude-3.5-sonnet"
                                     : provider === "kie"
-                                    ? "Contoh: gemini-3-8-flash"
+                                    ? "Contoh: gemini-4-argon, gemini-3-8-flash, atau gemini-4-hydrogen"
                                     : "Contoh: gemini-4-hydrogen atau gemini-2.5-flash"
                                 }
                                 value={model}
@@ -2172,11 +2197,11 @@ Buatlah detailnya sejelas dan seakurat mungkin sesuai dengan kanon asli ceritany
                       />
                     ) : scriptViewMode === "segmented" ? (
                       <div className="space-y-3">
-                        {parseRecapScript(currentScriptText).map((p) => {
+                        {parseRecapScript(currentScriptText).map((p, idx) => {
                           const correspondingImg = images[p.index - 1];
                           return (
                             <div
-                              key={p.index}
+                              key={`${p.index}-${idx}`}
                               className="bg-white border border-slate-600/75 rounded-xl p-4 shadow-sm shadow-slate-900/10 flex gap-4 items-start"
                             >
                               {correspondingImg ? (

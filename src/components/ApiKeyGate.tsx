@@ -100,7 +100,15 @@ export const ApiKeyGate: React.FC<ApiKeyGateProps> = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, apiKey: keyToTest })
       });
-      const data = await response.json();
+      const rawText = await response.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (_) {
+        data = {
+          error: `Server mengembalikan respons tidak valid (${response.status}). Pastikan endpoint /api/test-key aktif.`
+        };
+      }
       if (response.ok && data.ok) {
         persistKeyToStorage(provider, keyToTest);
         setTestStates((prev) => ({
@@ -110,7 +118,7 @@ export const ApiKeyGate: React.FC<ApiKeyGateProps> = ({
       } else {
         setTestStates((prev) => ({
           ...prev,
-          [provider]: { status: "error", message: data.error || "API Key tidak valid." }
+          [provider]: { status: "error", message: data.error || `API Key tidak valid (${response.status}).` }
         }));
       }
     } catch (err: any) {
